@@ -10,3 +10,5 @@
 
 - Move Docker development sources into vloader/ and update Compose/Actions paths.
 - Integrate read-only NFS/SMB startup support into the main image and consolidate all source options in compose-template.yml.
+
+- Translate the WebGUI, accessibility labels, date formatting and API feedback into English.

@@ -181,7 +181,7 @@ func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if d.Decode(v) != nil {
-		fail(w, 400, "Ungültige Eingabe")
+		fail(w, 400, "Invalid input")
 		return false
 	}
 	return true
@@ -217,7 +217,7 @@ func (a *App) Handler() http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Method != "GET" && r.Method != "HEAD" && r.Header.Get("Origin") != a.origin {
-			fail(w, 403, "Ungültiger Ursprung")
+			fail(w, 403, "Invalid request origin")
 			return
 		}
 		m.ServeHTTP(w, r)
@@ -239,7 +239,7 @@ func (a *App) user(r *http.Request) string {
 func (a *App) guard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.user(r) == "" {
-			fail(w, 401, "Anmeldung erforderlich")
+			fail(w, 401, "Sign-in required")
 			return
 		}
 		h.ServeHTTP(w, r)
@@ -257,7 +257,7 @@ func (a *App) issue(w http.ResponseWriter, r *http.Request, user string) {
 		}
 	}
 	if len(a.sessions) >= 1000 {
-		fail(w, 503, "Zu viele Sitzungen")
+		fail(w, 503, "Too many sessions")
 		return
 	}
 	if c, e := r.Cookie("vloader_session"); e == nil {
@@ -276,14 +276,14 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 	until := a.attempts["local"]
 	if time.Now().Before(until) {
 		a.mu.Unlock()
-		fail(w, 429, "Bitte kurz warten")
+		fail(w, 429, "Please wait a moment")
 		return
 	}
 	a.attempts["local"] = time.Now().Add(time.Second)
 	a.mu.Unlock()
 	e := bcrypt.CompareHashAndPassword(a.password, []byte(in.Password))
 	if e != nil || subtle.ConstantTimeCompare([]byte(in.Username), []byte(env("ADMIN_USERNAME", "admin"))) != 1 {
-		fail(w, 401, "Anmeldung fehlgeschlagen")
+		fail(w, 401, "Sign-in failed")
 		return
 	}
 	a.issue(w, r, in.Username)
@@ -300,7 +300,7 @@ func (a *App) logout(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) oidcStart(w http.ResponseWriter, r *http.Request) {
 	if a.oauth == nil {
-		fail(w, 404, "OIDC nicht eingerichtet")
+		fail(w, 404, "OIDC not configured")
 		return
 	}
 	state, nonce, v := random(), random(), oauth2.GenerateVerifier()
@@ -312,7 +312,7 @@ func (a *App) oidcStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(a.flows) >= 1000 {
 		a.mu.Unlock()
-		fail(w, 429, "Bitte später erneut versuchen")
+		fail(w, 429, "Please try again later")
 		return
 	}
 	a.flows[state] = flow{nonce, v, time.Now().Add(5 * time.Minute)}
@@ -322,13 +322,13 @@ func (a *App) oidcStart(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if a.oauth == nil {
-		fail(w, 404, "OIDC nicht eingerichtet")
+		fail(w, 404, "OIDC not configured")
 		return
 	}
 	state := r.URL.Query().Get("state")
 	c, e := r.Cookie("oidc_state")
 	if e != nil || state == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(state)) != 1 {
-		fail(w, 403, "Ungültiger Anmeldevorgang")
+		fail(w, 403, "Invalid sign-in request")
 		return
 	}
 	a.mu.Lock()
@@ -336,20 +336,20 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	delete(a.flows, state)
 	a.mu.Unlock()
 	if !ok || time.Now().After(f.Expiry) {
-		fail(w, 403, "Anmeldung abgelaufen")
+		fail(w, 403, "Sign-in request expired")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 	tok, e := a.oauth.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(f.Verifier))
 	if e != nil {
-		fail(w, 401, "OIDC Anmeldung fehlgeschlagen")
+		fail(w, 401, "OIDC sign-in failed")
 		return
 	}
 	raw, _ := tok.Extra("id_token").(string)
 	id, e := a.verifier.Verify(ctx, raw)
 	if e != nil || id.Nonce != f.Nonce {
-		fail(w, 401, "Ungültiges ID-Token")
+		fail(w, 401, "Invalid ID token")
 		return
 	}
 	allowed := false
@@ -359,7 +359,7 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !allowed {
-		fail(w, 403, "Konto nicht freigegeben")
+		fail(w, 403, "Account not authorized")
 		return
 	}
 	a.issue(w, r, id.Subject)
@@ -388,7 +388,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	u, e := url.Parse(c.EmbyURL)
 	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") || (c.SourceMode != "emby" && c.SourceMode != "mount") || !strings.HasPrefix(c.SourcePrefix, "/") {
-		fail(w, 400, "URL, Quellpfad oder Modus ungültig")
+		fail(w, 400, "Invalid URL, source path or transfer mode")
 		return
 	}
 	a.syncMu.Lock()
@@ -396,17 +396,17 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	old := a.config()
 	if c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
-			fail(w, 400, "Bei Serverwechsel API-Schlüssel erneut eingeben")
+			fail(w, 400, "Enter the API key again when switching servers")
 			return
 		}
 		c.APIKey = old.APIKey
 	}
 	if c.APIKey == "" {
-		fail(w, 400, "API-Schlüssel fehlt")
+		fail(w, 400, "API key is required")
 		return
 	}
 	if e := persist(a.data+"/settings.json", c); e != nil {
-		fail(w, 500, "Speichern fehlgeschlagen")
+		fail(w, 500, "Failed to save settings")
 		return
 	}
 	a.mu.Lock()
@@ -416,7 +416,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) emby(ctx context.Context, c Config, endpoint string) (*http.Response, error) {
 	if c.EmbyURL == "" || c.APIKey == "" {
-		return nil, errors.New("Emby nicht eingerichtet")
+		return nil, errors.New("Emby not configured")
 	}
 	req, e := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.EmbyURL, "/")+endpoint, nil)
 	if e != nil {
@@ -430,11 +430,11 @@ func (a *App) emby(ctx context.Context, c Config, endpoint string) (*http.Respon
 	}
 	res, e := client.Do(req)
 	if e != nil {
-		return nil, errors.New("Emby nicht erreichbar")
+		return nil, errors.New("Unable to connect to Emby")
 	}
 	if res.StatusCode != 200 {
 		res.Body.Close()
-		return nil, fmt.Errorf("Emby antwortet mit HTTP %d", res.StatusCode)
+		return nil, fmt.Errorf("Emby returned HTTP %d", res.StatusCode)
 	}
 	return res, nil
 }
@@ -448,7 +448,7 @@ func (a *App) fetch(ctx context.Context, c Config, endpoint string, out any) err
 }
 func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 	if !a.syncMu.TryLock() {
-		fail(w, 409, "Synchronisierung läuft bereits")
+		fail(w, 409, "Sync already in progress")
 		return
 	}
 	defer a.syncMu.Unlock()
@@ -479,13 +479,13 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			if start > 100000 {
-				fail(w, 422, "Bibliothek überschreitet 100.000 Einträge")
+				fail(w, 422, "Library exceeds 100,000 items")
 				return
 			}
 		}
 	}
 	if e := persist(a.data+"/catalog.json", next); e != nil {
-		fail(w, 500, "Katalog konnte nicht gespeichert werden")
+		fail(w, 500, "Failed to save the catalog")
 		return
 	}
 	a.mu.Lock()
@@ -511,18 +511,18 @@ func (a *App) image(w http.ResponseWriter, r *http.Request) {
 	id, kind := r.PathValue("id"), r.PathValue("kind")
 	_, c, ok := a.sourceItem(id)
 	if !ok || (kind != "Primary" && kind != "Backdrop") {
-		fail(w, 404, "Bild nicht gefunden")
+		fail(w, 404, "Image not found")
 		return
 	}
 	res, e := a.emby(r.Context(), c, "/Items/"+url.PathEscape(id)+"/Images/"+kind+"?MaxWidth=1280&Quality=85")
 	if e != nil {
-		fail(w, 502, "Bild nicht verfügbar")
+		fail(w, 502, "Image unavailable")
 		return
 	}
 	defer res.Body.Close()
 	ct := res.Header.Get("Content-Type")
 	if !strings.HasPrefix(ct, "image/") || strings.Contains(ct, "svg") {
-		fail(w, 502, "Ungültiges Bildformat")
+		fail(w, 502, "Invalid image format")
 		return
 	}
 	w.Header().Set("Content-Type", ct)
@@ -533,18 +533,18 @@ func relativeSource(prefix, p string) (string, error) {
 	prefix = path.Clean(prefix)
 	p = path.Clean(p)
 	if prefix == "/" || !strings.HasPrefix(p, prefix+"/") {
-		return "", errors.New("Pfad außerhalb der Quelle")
+		return "", errors.New("Path is outside the source")
 	}
 	rel := strings.TrimPrefix(p, prefix+"/")
 	if !fs.ValidPath(rel) {
-		return "", errors.New("Ungültiger Quellpfad")
+		return "", errors.New("Invalid source path")
 	}
 	return rel, nil
 }
 func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	item, c, ok := a.sourceItem(r.PathValue("id"))
 	if !ok || item.IsFolder {
-		fail(w, 404, "Datei nicht gefunden")
+		fail(w, 404, "File not found")
 		return
 	}
 	if c.SourceMode == "mount" {
@@ -555,19 +555,19 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 		}
 		root, e := os.OpenRoot(env("MEDIA_ROOT", "/media"))
 		if e != nil {
-			fail(w, 503, "Freigabe nicht verfügbar")
+			fail(w, 503, "Share unavailable")
 			return
 		}
 		defer root.Close()
 		file, e := root.Open(rel)
 		if e != nil {
-			fail(w, 404, "Quelldatei nicht verfügbar")
+			fail(w, 404, "Source file unavailable")
 			return
 		}
 		defer file.Close()
 		info, e := file.Stat()
 		if e != nil || !info.Mode().IsRegular() {
-			fail(w, 404, "Keine reguläre Datei")
+			fail(w, 404, "Not a regular file")
 			return
 		}
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
@@ -576,7 +576,7 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	}
 	res, e := a.emby(r.Context(), c, "/Items/"+url.PathEscape(item.ID)+"/Download")
 	if e != nil {
-		fail(w, 502, "Emby-Download nicht verfügbar")
+		fail(w, 502, "Emby download unavailable")
 		return
 	}
 	defer res.Body.Close()
