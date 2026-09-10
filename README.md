@@ -67,8 +67,8 @@ Alle zugelassenen Benutzer besitzen Administratorrechte und können die gesamte 
 - `compose.yml`: lokale Entwicklung, non-root und Read-only-Härtung.
 - `compose-template.yml`: Standardvorlage; `compose-templte.yml`: zusätzlich der angefragte Dateiname.
 - `.env.example`: kommentierte Variablen; `.enx.example`: zusätzlich der angefragte Dateiname.
-- `AGENTS.md`, `Security.md`, `SECURITY.md`, `securityskills.md`, `.agents/`: angepasste Projekt- und Sicherheitsvorgaben.
-- `docs/`: Architektur, Tests, Entwicklung, Herkunft der Vorlagen und Verifikation.
+- `Security.md`, `SECURITY.md`: Sicherheitshinweise und Meldeverfahren.
+- `docs/`: Architektur und Teststrategie.
 
 Gespeicherte GUI-Einstellungen überschreiben Emby-/Quellen-Startwerte aus `.env`; Änderungen danach über die GUI vornehmen. OIDC und lokale Zugangsdaten bleiben ausschließlich Umgebungswerte. Ein Serverwechsel verlangt die erneute Eingabe eines API-Schlüssels und eine neue Synchronisierung.
 
@@ -92,6 +92,3 @@ docker run --rm -v "$PWD:/app" -w /app golang:1.27.1-alpine sh -c 'go test ./...
 
 CI führt Tests, Race-Detector, vet, Schwachstellenprüfung, Compose-Validierung und Image-Build aus. Sie veröffentlicht keine Images oder Releases automatisch. Externe Integrationen separat mit echten Servern abnehmen; siehe [Teststrategie](docs/TESTING-STRATEGY.md).
 
-## Vorlagenquellen
-
-[agents-template](https://github.com/pedrofuentes/agents-template) und das lokale Projekt `caddymgm`; Anpassungen und MIT-Lizenzhinweis unter [docs/TEMPLATE-SOURCES.md](docs/TEMPLATE-SOURCES.md).

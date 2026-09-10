@@ -22,4 +22,4 @@ The Emby API key is a server-side credential. The configured Emby server is an a
 All sessions are invalidated on restart. Login attempts are globally limited to one per second; protect an Internet-facing instance additionally at the reverse proxy. The catalog is a mirror of configured server data and image bytes are fetched on demand, not an offline image archive. Downloads stream to the browser and do not create server-side download jobs. Emby API streaming requires an available server; mounted file downloads require the configured share. All title IDs are checked against the active catalog.
 
 ## Verification
-See docs/TESTING-STRATEGY.md and docs/VALIDATION.md. Do not interpret inherited CaddyMGM findings as vloader findings. Live provider and share verification requires operator-supplied configuration.
+See docs/TESTING-STRATEGY.md. Live provider and share verification requires operator-supplied configuration.
