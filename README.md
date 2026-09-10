@@ -90,5 +90,37 @@ docker run --rm -v "$PWD:/app" -w /app golang:1.27.1-alpine sh -c 'go test ./...
 # Race-Detector benötigt zusätzlich einen C-Compiler, z. B. apk add --no-cache build-base.
 ```
 
-CI führt Tests, Race-Detector, vet, Schwachstellenprüfung, Compose-Validierung und Image-Build aus. Sie veröffentlicht keine Images oder Releases automatisch. Externe Integrationen separat mit echten Servern abnehmen; siehe [Teststrategie](docs/TESTING-STRATEGY.md).
+CI führt Tests, Race-Detector, vet, Schwachstellenprüfung, Compose-Validierung und Image-Build aus. Die separate Action **Build Docker image** veröffentlicht Images und Releases ausschließlich für Release-Tags. Externe Integrationen separat mit echten Servern abnehmen; siehe [Teststrategie](docs/TESTING-STRATEGY.md).
 
+
+## GitHub Actions
+
+### Build Docker image
+
+Bei Push auf `main` und Pull Requests wird das Image gebaut und geprüft, ohne es zu veröffentlichen. Die manuelle Ausführung ohne `release_tag` ist ebenfalls ein reiner Testbuild.
+
+Releases verwenden wie bei caddymgm folgende Tags:
+
+| Git-Tag | GHCR-Tags |
+| --- | --- |
+| `v0.1` | `ghcr.io/thetaran/vloader:0.1`, `:latest`, `:sha-<commit>` |
+| `v0.1.1` | `ghcr.io/thetaran/vloader:0.1.1`, `:0.1`, `:sha-<commit>` |
+
+Vor dem Taggen müssen die Release Notes als `.github/release-notes/<tag>.md` im Release-Commit vorliegen. Anschließend den ausdrücklich gewählten Git-Tag pushen. Der Workflow prüft den Code, veröffentlicht das Image, verifiziert die Registry-Tags und erstellt den GitHub Release. Bereits vorhandene GitHub Releases bleiben unverändert.
+
+Ein bestehender Tag kann über **Run workflow → release_tag** erneut verarbeitet werden. Dabei wird exakt der Quellstand dieses Tags ausgecheckt, auch wenn die manuelle Ausführung auf `main` gestartet wurde. Der Workflow erzeugt keine Git-Tags. Der erste Image-Release ist erst nach einem Release-Tag verfügbar.
+
+### Check component versions
+
+Läuft montags um 06:17 UTC, manuell und bei Änderungen der überwachten Dateien auf `main`. Vergleicht Go in `go.mod` und Dockerfile, den Alpine-Laufzeitzweig sowie sämtliche in `go.mod` gepinnten direkten und indirekten Module mit den stabilen Upstream-Versionen. Ein Alpine-Minor-Tag folgt Patch-Updates automatisch; gemeldet wird der nächste stabile Minor-Zweig.
+
+Bei Updates wird genau ein markiertes Issue **Component updates available** erstellt oder aktualisiert; sind alle Komponenten aktuell, wird es geschlossen. Ein Fehler beim Abrufen der Versionen bricht den Lauf ab, ohne ein vorhandenes Issue fälschlich zu schließen. Versionsänderungen, Releases und Image-Publishing erfolgen nicht durch diese Prüfung.
+
+Lokal ohne GitHub-Schreibzugriff testen:
+
+```sh
+python3 scripts/check-component-versions.py
+python3 -m unittest discover -s scripts -p 'test_*.py'
+```
+
+Die Actions verwenden den von GitHub bereitgestellten `GITHUB_TOKEN`; zusätzliche Registry-Passwörter sind nicht erforderlich. Der Build benötigt `packages: write`, die Release-Erstellung `contents: write` und die Versionsprüfung `issues: write`.

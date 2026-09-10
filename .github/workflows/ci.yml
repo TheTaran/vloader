@@ -23,5 +23,5 @@ jobs:
         run: |
           cp .env.example .env
           docker compose config --quiet
-      - name: Build image
-        run: docker build -t vloader:ci .
+      - name: Test release and version-check tooling
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'

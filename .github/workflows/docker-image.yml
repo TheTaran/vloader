@@ -1,0 +1,178 @@
+name: Build Docker image
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to publish (v0.1 or v0.1.1); empty builds without publishing
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/thetaran/vloader
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      is_release: ${{ steps.release.outputs.is_release }}
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - name: Classify release
+        id: release
+        env:
+          REQUESTED_TAG: ${{ inputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag=""
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            tag="$REQUESTED_TAG"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" && "$GITHUB_REF_TYPE" == "tag" ]]; then
+            tag="$GITHUB_REF_NAME"
+          fi
+          if [[ -z "$tag" ]]; then
+            echo "is_release=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$ ]]; then
+            echo "is_release=true" >> "$GITHUB_OUTPUT"
+            echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          else
+            echo "Invalid release tag; expected vX.Y or vX.Y.Z" >&2
+            exit 1
+          fi
+
+      - name: Checkout selected source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.is_release == 'true' && format('refs/tags/{0}', steps.release.outputs.tag) || github.ref }}
+          persist-credentials: false
+
+      - name: Record source and require release notes
+        id: source
+        env:
+          IS_RELEASE: ${{ steps.release.outputs.is_release }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            test -s ".github/release-notes/${RELEASE_TAG}.md"
+          fi
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: |
+          go test ./...
+          go vet ./...
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        if: steps.release.outputs.is_release == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Prepare Docker tags
+        id: tags
+        env:
+          IS_RELEASE: ${{ steps.release.outputs.is_release }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo 'tags<<TAGS'
+            if [[ "$IS_RELEASE" == "true" ]]; then
+              version="${RELEASE_TAG#v}"
+              echo "${IMAGE_NAME}:${version}"
+              if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+                echo "${IMAGE_NAME}:latest"
+              else
+                echo "${IMAGE_NAME}:${version%.*}"
+              fi
+            fi
+            echo "${IMAGE_NAME}:sha-${SOURCE_SHA:0:7}"
+            echo TAGS
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ steps.release.outputs.is_release == 'true' }}
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.tag || 'development' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify published image
+        if: steps.release.outputs.is_release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          version="${RELEASE_TAG#v}"
+          docker buildx imagetools inspect "${IMAGE_NAME}:${version}"
+          docker buildx imagetools inspect "${IMAGE_NAME}:sha-${SOURCE_SHA:0:7}"
+          if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            docker buildx imagetools inspect "${IMAGE_NAME}:latest"
+          else
+            docker buildx imagetools inspect "${IMAGE_NAME}:${version%.*}"
+          fi
+
+  release:
+    needs: build
+    if: needs.build.outputs.is_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout released source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build.outputs.sha }}
+          persist-credentials: false
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release already exists; leaving it unchanged."
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+              --notes-file ".github/release-notes/${RELEASE_TAG}.md"
+          fi
+          gh release view "$RELEASE_TAG"

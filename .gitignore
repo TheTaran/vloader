@@ -42,3 +42,7 @@ docs/TEMPLATE-SOURCES.md
 docs/DEVELOPMENT-WORKFLOW.md
 docs/VALIDATION.md
 .sentinel/
+
+# Python tooling cache
+__pycache__/
+*.pyc
