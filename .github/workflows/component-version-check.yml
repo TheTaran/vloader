@@ -8,9 +8,9 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/component-version-check.yml'
-      - 'scripts/check-component-versions.py'
-      - 'Dockerfile'
-      - 'go.mod'
+      - 'vloader/scripts/check-component-versions.py'
+      - 'vloader/Dockerfile'
+      - 'vloader/go.mod'
 
 permissions:
   contents: read
@@ -33,4 +33,4 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
-        run: python3 scripts/check-component-versions.py --manage-issue
+        run: python3 vloader/scripts/check-component-versions.py --manage-issue

@@ -1,10 +1,12 @@
 name: vloader
 services:
   vloader:
-    build: .
+    build: ./vloader
     image: vloader:dev
     restart: unless-stopped
     env_file: .env
+    # To use NFS/SMB, copy the chosen settings from compose-template.yml here.
+    # Network mounting runs inside this image; remove the /media bind below.
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
     volumes:

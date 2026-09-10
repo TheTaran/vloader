@@ -7,3 +7,6 @@
 
 - Add Build Docker image with caddymgm-style release tags, GHCR verification and GitHub Releases.
 - Add scheduled component version checks for Go, Alpine and pinned Go modules with managed update issues.
+
+- Move Docker development sources into vloader/ and update Compose/Actions paths.
+- Integrate read-only NFS/SMB startup support into the main image and consolidate all source options in compose-template.yml.

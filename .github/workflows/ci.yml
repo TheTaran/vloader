@@ -7,11 +7,15 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vloader
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: vloader/go.mod
+          cache-dependency-path: vloader/go.sum
           cache: true
       - name: Format
         run: test -z "$(gofmt -l cmd internal)"
@@ -20,6 +24,7 @@ jobs:
       - name: Vulnerability check
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
       - name: Compose validation
+        working-directory: .
         run: |
           cp .env.example .env
           docker compose config --quiet
