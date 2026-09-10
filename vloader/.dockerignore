@@ -7,3 +7,6 @@ media
 data
 .worktrees
 *.log
+
+secrets
+*.credentials

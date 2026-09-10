@@ -78,10 +78,12 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          go-version-file: vloader/go.mod
+          cache-dependency-path: vloader/go.sum
           cache: true
 
       - name: Test
+        working-directory: vloader
         run: |
           go test ./...
           go vet ./...
@@ -124,13 +126,33 @@ jobs:
       - name: Build Docker image
         uses: docker/build-push-action@v6
         with:
-          context: .
-          push: ${{ steps.release.outputs.is_release == 'true' }}
+          context: ./vloader
+          load: true
+          push: false
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
             org.opencontainers.image.version=${{ steps.release.outputs.tag || 'development' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Test image startup and network helpers
+        env:
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: sh vloader/scripts/test-image.sh "${IMAGE_NAME}:sha-${SOURCE_SHA:0:7}"
+
+      - name: Publish tested Docker image
+        if: steps.release.outputs.is_release == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./vloader
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
+            org.opencontainers.image.version=${{ steps.release.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

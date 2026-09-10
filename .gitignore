@@ -9,7 +9,7 @@ data/
 .agent-backup/
 .worktrees/
 coverage.out
-/vloader
+/vloader/vloader
 
 # Local AI agent instructions, skills, context and working notes
 AGENTS.md
@@ -46,3 +46,7 @@ docs/VALIDATION.md
 # Python tooling cache
 __pycache__/
 *.pyc
+
+# Local network-share credentials
+secrets/
+*.credentials

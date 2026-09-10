@@ -6,6 +6,8 @@
 - /data: private settings.json and catalog.json, atomic replacement.
 - /media: read-only media root from bind mount, NFS or SMB.
 
+The source and Docker build context are under vloader/; Compose deployment files remain in the repository root. The main image includes NFS/CIFS mount helpers; optional startup mounts precede privilege drop to UID/GID 10001.
+
 The browser calls only vloader. vloader authenticates all catalog, settings, image and download calls. Emby libraries are copied with source IDs; items retain original ParentId and gain LibraryId for catalog filtering. Failed synchronization leaves the prior snapshot intact. Image requests use the same authenticated API proxy. Downloads stream either from Emby or through an os.Root-contained file handle, with file-range support for mounted sources.
 
 Settings updates and sync are serialized. Readers use a mutex for snapshot publication. Catalogs are bound to the source URL so changing servers cannot serve old IDs against a new server.

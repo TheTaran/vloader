@@ -5,7 +5,7 @@ import tempfile
 import textwrap
 import unittest
 
-WORKFLOW = (Path(__file__).resolve().parents[1] / ".github/workflows/docker-image.yml").read_text()
+WORKFLOW = (Path(__file__).resolve().parents[2] / ".github/workflows/docker-image.yml").read_text()
 
 
 def run_step(name, values):

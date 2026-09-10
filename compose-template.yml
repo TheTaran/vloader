@@ -1,10 +1,39 @@
 name: vloader
 services:
   vloader:
-    build: .
+    build: ./vloader
     image: vloader:dev
     restart: unless-stopped
     env_file: .env
+    # Optional network source: copy ONE configuration below into compose.yml.
+    # Remove the /media bind mount below when SOURCE_MOUNT is nfs or smb.
+    # Add these common startup settings for either network source:
+    # user: "0:0"
+    # cap_add: [SYS_ADMIN, SETUID, SETGID]
+    # Replace security_opt below with:
+    # security_opt: [no-new-privileges:true, apparmor:unconfined]
+    # Root is used only during mounting; the application runs as 10001:10001.
+    # SYS_ADMIN allows mounting; AppArmor must allow mount on Linux hosts.
+    # The host kernel must support the selected filesystem (NFSv4 or CIFS).
+    #
+    # NFS option (no extra service or Compose file):
+    # environment:
+    #   SOURCE_MOUNT: nfs
+    #   SOURCE_MODE: mount
+    #   NFS_SERVER: ${NFS_SERVER:?Set NFS_SERVER}
+    #   NFS_EXPORT: ${NFS_EXPORT:?Set NFS_EXPORT}
+    #
+    # SMB option (use instead of the NFS environment above):
+    # Replace cap_add with the complete SMB helper capability set:
+    # cap_add: [SYS_ADMIN, SETUID, SETGID, DAC_READ_SEARCH, DAC_OVERRIDE]
+    # environment:
+    #   SOURCE_MOUNT: smb
+    #   SOURCE_MODE: mount
+    #   SMB_SERVER: ${SMB_SERVER:?Set SMB_SERVER}
+    #   SMB_SHARE: ${SMB_SHARE:?Set SMB_SHARE}
+    # secrets:
+    #   - smb_credentials
+    # Also copy the top-level secrets definition at the end of this template.
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
     volumes:
@@ -30,3 +59,10 @@ services:
         max-file: '3'
 volumes:
   vloader-data:
+
+# SMB only: credentials are a read-only Docker secret, never image content.
+# Create the host file with username=..., password=..., optional domain=... .
+# Protect it with mode 0600 and never commit it.
+# secrets:
+#   smb_credentials:
+#     file: ${SMB_CREDENTIALS_FILE:?Set SMB_CREDENTIALS_FILE}

@@ -23,29 +23,31 @@ Bibliotheks- und Titel-IDs, ursprüngliche Elternzuordnung, Beschreibung, Jahr, 
 
 Titel anklicken → Details → **Datei herunterladen**. Filme und Episoden sind einzeln herunterladbar; Serien-/Ordnerobjekte nicht. Downloads gehen in den Browser, nicht in eine serverseitige Warteschlange. Emby-Downloads erfordern einen erreichbaren Server und passende API-Berechtigung. Große Dateien werden gestreamt, nicht in den RAM geladen.
 
-## NFS
+## NFS und SMB im Hauptimage
 
-NFS-Server und Export in `.env` setzen, beispielsweise `NFS_SERVER=192.0.2.10`, `NFS_EXPORT=/exports/movies`. Die Export-Rechte müssen UID/GID 10001 lesenden Zugriff ermöglichen.
+Das Hauptimage enthält `nfs-utils`, `cifs-utils` und das Startskript für beide Dateiquellen. Es gibt keine separaten NFS-/SMB-Container oder Compose-Overlays mehr.
 
-```sh
-docker compose -f compose.yml -f compose.nfs.yml up -d --build
-```
+Alle Varianten stehen kommentiert in **compose-template.yml**. Die tatsächlich verwendete Variante wird direkt in **compose.yml** eingetragen. Für Downloads über die Emby-API bleibt die Standardkonfiguration ausreichend.
 
-In der GUI Download-Quelle **NFS / SMB** wählen und den **Quellpfad auf dem Emby-Server** setzen. Beispiel: Emby liefert `/mnt/movies/Film/a.mkv`, NFS exportiert dessen Inhalt → SourcePrefix `/mnt/movies` → Containerdatei `/media/Film/a.mkv`.
+### Freigabe aktivieren
 
-Docker führt den NFS-Mount aus. Die Webanwendung hat weder Root-Rechte noch Zugriff auf den Docker-Socket. Bei Änderung von NFS-Volume-Optionen ein neues Volume verwenden; bestehende Volume-Optionen werden von Docker nicht automatisch ersetzt. Keine pauschale Volume-Löschung.
+1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen; das Datenvolume beibehalten.
+2. Die gemeinsamen Mount-Einstellungen aus der Vorlage übernehmen: Startbenutzer `0:0`, `SYS_ADMIN`, `SETUID`, `SETGID` und das dort angegebene `security_opt`.
+3. Genau eine `environment`-Variante übernehmen: `SOURCE_MOUNT: nfs` oder `SOURCE_MOUNT: smb`.
+4. NFS-Server und Export beziehungsweise SMB-Server und Freigabe in `.env` eintragen. Für SMB zusätzlich die vollständige SMB-`cap_add`-Zeile (einschließlich `DAC_READ_SEARCH`, `DAC_OVERRIDE`) und die Secret-Definition aus der Vorlage in `compose.yml` übernehmen.
+5. `docker compose up -d --build --force-recreate` ausführen. In der GUI die Download-Quelle **NFS / SMB** auswählen und den Emby-Quellpfad setzen.
 
-## SMB
+Der Startprozess mountet schreibgeschützt nach `/media` und wechselt anschließend auf UID/GID `10001:10001`. Bei einem Mount-Fehler startet die Anwendung nicht. Ein bereits belegtes `/media` wird nicht übermountet. Die Webanwendung führt keine Mount-Befehle aus.
 
-Auf dem Docker-Host `cifs-utils` bereitstellen. Eine rootgeschützte Datei `/etc/vloader-smb.credentials` mit `username=...`, `password=...` und optional `domain=...` erstellen; Modus 0600.
+### NFS
 
-```sh
-sudo scripts/mount-smb.sh //server/share /mnt/vloader-media /etc/vloader-smb.credentials
-# .env: MEDIA_PATH=/mnt/vloader-media
-docker compose -f compose.yml -f compose.smb.yml up -d --build
-```
+`NFS_SERVER` ist ein Hostname oder eine IPv4-Adresse; `NFS_EXPORT` der absolute Exportpfad. NFSv4 über TCP wird verwendet. Beispiel: Emby liefert `/mnt/movies/Film/a.mkv`, der Export enthält `Film/a.mkv` → SourcePrefix `/mnt/movies` → Containerdatei `/media/Film/a.mkv`. Die Freigabe muss UID/GID 10001 lesenden Zugriff geben.
 
-In der GUI Download-Quelle **NFS / SMB** und passendes SourcePrefix speichern. Für dauerhafte Host-Mounts eine entsprechende systemd-/fstab-Konfiguration einrichten. Das Skript mountet schreibgeschützt mit SMB 3.1.1. SMB-Passwörter werden nicht in Docker-Volume-Optionen oder im Webformular gespeichert. Der Host-Mount wurde ohne deine Serverdaten nicht ausgeführt.
+### SMB
+
+`SMB_SERVER` ist ein Hostname oder eine IPv4-Adresse; `SMB_SHARE` der Freigabename. SMB 3.1.1 wird verwendet. Eine lokale Datei mit `username=...`, `password=...` und optional `domain=...` erstellen und mit Modus 0600 schützen. `SMB_CREDENTIALS_FILE` in `.env` bezeichnet diese Hostdatei; Compose reicht sie als schreibgeschütztes Secret `/run/secrets/smb_credentials` weiter. Sie gehört weder ins Repository noch ins Image. Dateien unter `secrets/` und `*.credentials` sind ausgeschlossen.
+
+Es ist kein manuelles Mounten auf dem Host erforderlich. Der Docker-Host muss jedoch Kernel-Unterstützung für NFS beziehungsweise CIFS bereitstellen. Die optionalen Mount-Capabilities gelten nur für die konfigurierte Freigabe; der Webprozess läuft ohne Root-Rechte. Ohne NFS/SMB-Aktivierung sind diese zusätzlichen Rechte nicht nötig.
 
 ## OIDC
 
@@ -60,23 +62,24 @@ OIDC_ALLOWED_SUBJECTS=stable-subject-id-1,stable-subject-id-2
 
 Redirect-URI beim Provider: `${APP_URL}/auth/callback`. Authorization Code Flow mit PKCE S256 und `openid profile` aktivieren. Bei einem vertraulichen Client das Client-Secret setzen. Die erlaubten Werte sind die stabilen `sub`-Claims, nicht E-Mail-Adressen. Nach Änderungen Container mit `docker compose up -d --force-recreate` neu erstellen. OIDC ist erst sichtbar, wenn eingerichtet; fehlerhafte Discovery verhindert einen irreführend funktionierenden Start.
 
-Alle zugelassenen Benutzer besitzen Administratorrechte und können die gesamte konfigurierte Sammlung sehen. Es gibt keine Übernahme individueller Emby-Benutzerrechte. Siehe [Security.md](Security.md).
+Alle zugelassenen Benutzer besitzen Administratorrechte und können die gesamte konfigurierte Sammlung sehen. Es gibt keine Übernahme individueller Emby-Benutzerrechte. Siehe [SECURITY.md](SECURITY.md).
 
 ## Konfiguration und Vorlagen
 
 - `compose.yml`: lokale Entwicklung, non-root und Read-only-Härtung.
-- `compose-template.yml`: Standardvorlage; `compose-templte.yml`: zusätzlich der angefragte Dateiname.
+- `compose-template.yml`: Standardvorlage einschließlich NFS-/SMB-Konfiguration.
 - `.env.example`: kommentierte Variablen; `.enx.example`: zusätzlich der angefragte Dateiname.
 - `Security.md`, `SECURITY.md`: Sicherheitshinweise und Meldeverfahren.
-- `docs/`: Architektur und Teststrategie.
+- `vloader/docs/`: Architektur und Teststrategie.
 
 Gespeicherte GUI-Einstellungen überschreiben Emby-/Quellen-Startwerte aus `.env`; Änderungen danach über die GUI vornehmen. OIDC und lokale Zugangsdaten bleiben ausschließlich Umgebungswerte. Ein Serverwechsel verlangt die erneute Eingabe eines API-Schlüssels und eine neue Synchronisierung.
 
 ## Entwicklung und Tests
 
-Mit Go 1.27.1 oder neuer:
+Mit Go 1.27.1 oder neuer im Quellverzeichnis:
 
 ```sh
+cd vloader
 go test ./...
 go test -race ./...
 go vet ./...
@@ -86,11 +89,11 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 Ohne Go auf dem Host:
 
 ```sh
-docker run --rm -v "$PWD:/app" -w /app golang:1.27.1-alpine sh -c 'go test ./... && go vet ./...'
+docker run --rm -v "$PWD/vloader:/app" -w /app golang:1.27.1-alpine sh -c 'go test ./... && go vet ./...'
 # Race-Detector benötigt zusätzlich einen C-Compiler, z. B. apk add --no-cache build-base.
 ```
 
-CI führt Tests, Race-Detector, vet, Schwachstellenprüfung, Compose-Validierung und Image-Build aus. Die separate Action **Build Docker image** veröffentlicht Images und Releases ausschließlich für Release-Tags. Externe Integrationen separat mit echten Servern abnehmen; siehe [Teststrategie](docs/TESTING-STRATEGY.md).
+CI führt Tests, Race-Detector, vet, Schwachstellenprüfung, Compose-Validierung und Image-Build aus. Die separate Action **Build Docker image** veröffentlicht Images und Releases ausschließlich für Release-Tags. Externe Integrationen separat mit echten Servern abnehmen; siehe [Teststrategie](vloader/docs/TESTING-STRATEGY.md).
 
 
 ## GitHub Actions
@@ -119,8 +122,28 @@ Bei Updates wird genau ein markiertes Issue **Component updates available** erst
 Lokal ohne GitHub-Schreibzugriff testen:
 
 ```sh
-python3 scripts/check-component-versions.py
-python3 -m unittest discover -s scripts -p 'test_*.py'
+python3 vloader/scripts/check-component-versions.py
+python3 -m unittest discover -s vloader/scripts -p 'test_*.py'
 ```
 
 Die Actions verwenden den von GitHub bereitgestellten `GITHUB_TOKEN`; zusätzliche Registry-Passwörter sind nicht erforderlich. Der Build benötigt `packages: write`, die Release-Erstellung `contents: write` und die Versionsprüfung `issues: write`.
+
+## Projektstruktur
+
+```text
+compose.yml                # aktive Deployment-Konfiguration
+compose-template.yml       # vollständige Vorlage inkl. NFS/SMB
+.env / .env.example        # lokale Werte / Beispiel
+.github/workflows/         # GitHub Actions
+vloader/
+  Dockerfile               # Hauptimage
+  .dockerignore
+  go.mod / go.sum
+  cmd/                     # Go-Einstiegspunkt
+  internal/                # Backend und eingebettete WebGUI
+  docker/entrypoint.sh     # optionale NFS-/SMB-Mounts beim Start
+  scripts/                 # Versionsprüfung und Entwicklungstests
+  docs/                    # Architektur und Teststrategie
+```
+
+Alle Compose-Befehle werden im Repository-Root ausgeführt. Docker baut ausschließlich aus `./vloader`; lokale Einstellungen und Betriebsdaten liegen außerhalb dieses Build-Kontexts.
