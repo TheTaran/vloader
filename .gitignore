@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+.enx
+media/
+data/
+*.log
+*.tmp
+.agent-backup/
+.worktrees/
+coverage.out
+/vloader

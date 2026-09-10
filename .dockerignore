@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+.agents
+.agent-backup
+media
+data
+.worktrees
+*.log

@@ -1,0 +1,23 @@
+# Copy to .env; generate ADMIN_PASSWORD with: openssl rand -hex 24
+APP_URL=http://localhost:8090
+BIND_ADDRESS=127.0.0.1
+PORT=8090
+ADMIN_USERNAME=admin
+ADMIN_PASSWORD=
+DATA_DIR=/data
+EMBY_URL=
+EMBY_API_KEY=
+SOURCE_MODE=emby
+SOURCE_PREFIX=/media
+MEDIA_ROOT=/media
+MEDIA_PATH=./media
+OIDC_ISSUER=
+OIDC_CLIENT_ID=
+OIDC_CLIENT_SECRET=
+# Comma-separated stable OIDC sub values. All others are denied.
+OIDC_ALLOWED_SUBJECTS=
+NFS_SERVER=
+NFS_EXPORT=
+SMB_SERVER=
+SMB_SHARE=
+SMB_CREDENTIALS_FILE=
