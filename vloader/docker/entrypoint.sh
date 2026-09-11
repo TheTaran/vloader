@@ -30,7 +30,21 @@ case "$mode" in
                 [ -n "${SMB_CREDENTIAL_PASSWORD:-}" ] || fail 'SMB_CREDENTIAL_PASSWORD is required'
                 credentials=/tmp/smb-credentials
                 umask 077
-                printf 'username=%s\npassword=%s\n' "$SMB_CREDENTIAL_USERNAME" "$SMB_CREDENTIAL_PASSWORD" > "$credentials"
+                smb_username="$SMB_CREDENTIAL_USERNAME"
+                smb_domain=""
+                case "$smb_username" in
+                    *\\*)
+                        smb_domain=${smb_username%%\\*}
+                        smb_username=${smb_username#*\\}
+                        [ -n "$smb_domain" ] || fail 'SMB credential domain is empty'
+                        [ -n "$smb_username" ] || fail 'SMB credential username is empty'
+                        ;;
+                esac
+                if [ -n "$smb_domain" ]; then
+                    printf 'username=%s\ndomain=%s\npassword=%s\n' "$smb_username" "$smb_domain" "$SMB_CREDENTIAL_PASSWORD" > "$credentials"
+                else
+                    printf 'username=%s\npassword=%s\n' "$smb_username" "$SMB_CREDENTIAL_PASSWORD" > "$credentials"
+                fi
                 trap 'rm -f "$credentials"' EXIT
                 echo 'vloader: mounting read-only SMB source'
                 timeout 30 mount.cifs "//${SMB_SERVER}/${SMB_SHARE}" /media -n \

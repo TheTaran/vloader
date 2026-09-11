@@ -14,6 +14,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path"
@@ -38,15 +39,20 @@ type Config struct {
 	OIDCClientID        string
 	OIDCClientSecret    string
 	OIDCAllowedSubjects string
+	OIDCAdminSubjects   string
 	UpdateOIDC          bool
+	SyncEnabled         bool
+	SyncIntervalMinutes int
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
 	ID                string          `json:"Id"`
 	Name              string
 	Type              string
+	CollectionType    string
 	Path              string
 	Overview          string
+	PremiereDate      string
 	ProductionYear    int
 	CommunityRating   float64
 	RunTimeTicks      int64
@@ -64,6 +70,13 @@ type Item struct {
 		Path      string
 		Container string
 		Size      int64
+	}
+	MediaStreams      []struct {
+		Type         string
+		Codec        string
+		Language     string
+		DisplayTitle string
+		IsDefault    bool
 	}
 }
 
@@ -91,6 +104,7 @@ type session struct {
 	User   string
 	Expiry time.Time
 }
+var sessionRoles sync.Map
 type flow struct {
 	Nonce, Verifier string
 	Expiry          time.Time
@@ -101,6 +115,7 @@ type App struct {
 	cfg       Config
 	catalog   Catalog
 	sessions  map[string]session
+	roles     map[string]string
 	flows     map[string]flow
 	attempts  map[string]time.Time
 	password  []byte
@@ -143,11 +158,15 @@ func New() (*App, error) {
 	if e = os.MkdirAll(a.data, 0700); e != nil {
 		return nil, e
 	}
-	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS")}
+	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS"), OIDCAdminSubjects: os.Getenv("OIDC_ADMIN_SUBJECTS")}
 	if b, e := os.ReadFile(a.data + "/settings.json"); e == nil {
 		if e = json.Unmarshal(b, &a.cfg); e != nil {
 			return nil, e
 		}
+	}
+	if a.cfg.SyncIntervalMinutes <= 0 {
+		a.cfg.SyncIntervalMinutes = 60
+		a.cfg.SyncEnabled = true
 	}
 	if b, e := os.ReadFile(a.data + "/catalog.json"); e == nil {
 		if e = json.Unmarshal(b, &a.catalog); e != nil {
@@ -171,7 +190,26 @@ func New() (*App, error) {
 	if !a.localAuth && a.oauth == nil {
 		return nil, errors.New("enable local authentication or configure OIDC")
 	}
+	go a.scheduler()
 	return a, nil
+}
+func (a *App) scheduler() {
+	for {
+		c := a.config()
+		minutes := c.SyncIntervalMinutes
+		if minutes < 5 { minutes = 60 }
+		t := time.NewTimer(time.Duration(minutes) * time.Minute)
+		<-t.C
+		if a.config().SyncEnabled && a.config().EmbyURL != "" {
+			a.syncBackground()
+		}
+	}
+}
+func (a *App) syncBackground() {
+	r := httptest.NewRequest(http.MethodPost, "/api/sync", nil)
+	w := httptest.NewRecorder()
+	a.syncCatalog(w, r)
+	if w.Code >= 300 { log.Printf("scheduled sync failed: %s", w.Body.String()) }
 }
 func (a *App) configureOIDC(c Config) error {
 	if issuer := c.OIDCIssuer; issuer != "" {
@@ -227,9 +265,9 @@ func (a *App) Handler() http.Handler {
 		}
 		jsonOut(w, a.catalog)
 	})))
-	m.Handle("GET /api/settings", a.guard(http.HandlerFunc(a.settings)))
-	m.Handle("POST /api/settings", a.guard(http.HandlerFunc(a.saveSettings)))
-	m.Handle("POST /api/sync", a.guard(http.HandlerFunc(a.syncCatalog)))
+	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
+	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
+	m.Handle("POST /api/sync", a.adminGuard(http.HandlerFunc(a.syncCatalog)))
 	m.Handle("GET /api/images/{id}/{kind}", a.guard(http.HandlerFunc(a.image)))
 	m.Handle("GET /api/download/{id}", a.guard(http.HandlerFunc(a.download)))
 	sub, _ := fs.Sub(assets, "web")
@@ -260,6 +298,7 @@ func (a *App) user(r *http.Request) string {
 	}
 	return s.User
 }
+func (a *App) role(r *http.Request) string { c, e := r.Cookie("vloader_session"); if e != nil { return "" }; a.mu.RLock(); s := a.sessions[c.Value]; a.mu.RUnlock(); if time.Now().After(s.Expiry) { return "" }; role, _ := sessionRoles.Load(c.Value); if role == nil { return "admin" }; return role.(string) }
 func (a *App) guard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.user(r) == "" {
@@ -269,10 +308,11 @@ func (a *App) guard(h http.Handler) http.Handler {
 		h.ServeHTTP(w, r)
 	})
 }
+func (a *App) adminGuard(h http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { if a.user(r)=="" { fail(w,401,"Sign-in required"); return }; if a.role(r)!="admin" { fail(w,403,"Administrator access required"); return }; h.ServeHTTP(w,r) }) }
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
-	jsonOut(w, map[string]any{"user": a.user(r), "oidc": a.oauth != nil, "localAuth": a.localAuth})
+	jsonOut(w, map[string]any{"user": a.user(r), "role": a.role(r), "admin": a.role(r)=="admin", "oidc": a.oauth != nil, "localAuth": a.localAuth})
 }
-func (a *App) issue(w http.ResponseWriter, r *http.Request, user string) {
+func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for k, s := range a.sessions {
@@ -288,7 +328,8 @@ func (a *App) issue(w http.ResponseWriter, r *http.Request, user string) {
 		delete(a.sessions, c.Value)
 	}
 	key := random()
-	a.sessions[key] = session{user, time.Now().Add(12 * time.Hour)}
+	a.sessions[key] = session{User: user, Expiry: time.Now().Add(12 * time.Hour)}
+	sessionRoles.Store(key, role)
 	http.SetCookie(w, &http.Cookie{Name: "vloader_session", Value: key, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(a.origin, "https:"), SameSite: http.SameSiteLaxMode, MaxAge: 43200})
 }
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
@@ -314,7 +355,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "Sign-in failed")
 		return
 	}
-	a.issue(w, r, in.Username)
+	a.issue(w, r, in.Username, "admin")
 	jsonOut(w, map[string]bool{"ok": true})
 }
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
@@ -390,13 +431,15 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "Account not authorized")
 		return
 	}
-	a.issue(w, r, id.Subject)
+	role := "user"
+	for _, sub := range strings.Split(a.config().OIDCAdminSubjects, ",") { if strings.TrimSpace(sub) == id.Subject { role = "admin" } }
+	a.issue(w, r, id.Subject, role)
 	http.Redirect(w, r, "/", 303)
 }
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c := a.config()
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "LocalAuth": a.localAuth})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes})
 }
 func persist(file string, v any) error {
 	b, e := json.Marshal(v)
@@ -422,8 +465,11 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 	old := a.config()
+	if c.SyncIntervalMinutes == 0 { c.SyncIntervalMinutes = old.SyncIntervalMinutes }
+	if c.SyncIntervalMinutes == 0 { c.SyncIntervalMinutes = 60 }
+	if c.SyncIntervalMinutes < 5 || c.SyncIntervalMinutes > 10080 { fail(w, 400, "Sync interval must be between 5 minutes and 7 days"); return }
 	if !c.UpdateOIDC {
-		c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCAllowedSubjects = old.OIDCIssuer, old.OIDCClientID, old.OIDCClientSecret, old.OIDCAllowedSubjects
+		c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCAllowedSubjects, c.OIDCAdminSubjects = old.OIDCIssuer, old.OIDCClientID, old.OIDCClientSecret, old.OIDCAllowedSubjects, old.OIDCAdminSubjects
 	}
 	if c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
@@ -462,6 +508,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.cfg = c
 	a.mu.Unlock()
+	if c.EmbyURL != "" && (old.EmbyURL == "" || old.APIKey == "" || a.catalog.Updated.IsZero()) { go a.syncBackground() }
 	jsonOut(w, map[string]bool{"ok": true})
 }
 func (a *App) emby(ctx context.Context, c Config, endpoint string) (*http.Response, error) {
@@ -515,7 +562,7 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 				Items            []Item
 				TotalRecordCount int
 			}
-			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "Fields": {"Overview,Path,Genres,MediaSources,ParentId"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
+			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "Fields": {"Overview,Path,Genres,MediaSources,MediaStreams,PremiereDate,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
 			if e := a.fetch(r.Context(), c, "/Items?"+q.Encode(), &page); e != nil {
 				fail(w, 502, e.Error())
 				return

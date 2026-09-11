@@ -6,19 +6,24 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
-    # To use NFS/SMB, copy the chosen settings from compose-template.yml here.
-    # Network mounting runs inside this image; remove the /media bind below.
+      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED}
+      SOURCE_MOUNT: smb
+      SMB_SERVER: ${SMB_SERVER}
+      SMB_SHARE: ${SMB_SHARE}
+      SMB_CREDENTIAL_USERNAME: ${SMB_CREDENTIAL_USERNAME}
+      SMB_CREDENTIAL_PASSWORD: ${SMB_CREDENTIAL_PASSWORD}
+    user: "0:0"
+    cap_drop: [ALL]
+    cap_add: [SYS_ADMIN, SETUID, SETGID, DAC_READ_SEARCH, DAC_OVERRIDE]
+    security_opt: [no-new-privileges:true, apparmor:unconfined]
     ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
+      - "${BIND_ADDRESS}:${PORT}:8080"
     volumes:
       - vloader-data:/data
-      - ${MEDIA_PATH:-./media}:/media:ro
+      # /media is mounted from SMB by the entrypoint.
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
     pids_limit: 128
     mem_limit: 512m
     healthcheck:

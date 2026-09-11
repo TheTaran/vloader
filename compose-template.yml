@@ -21,7 +21,6 @@ services:
     # NFS option (no extra service or Compose file):
     # environment:
     #   SOURCE_MOUNT: nfs
-    #   SOURCE_MODE: mount
     #   NFS_SERVER: ${NFS_SERVER:?Set NFS_SERVER}
     #   NFS_EXPORT: ${NFS_EXPORT:?Set NFS_EXPORT}
     #
@@ -30,9 +29,9 @@ services:
     # cap_add: [SYS_ADMIN, SETUID, SETGID, DAC_READ_SEARCH, DAC_OVERRIDE]
     # environment:
     #   SOURCE_MOUNT: smb
-    #   SOURCE_MODE: mount
     #   SMB_SERVER: ${SMB_SERVER:?Set SMB_SERVER}
     #   SMB_SHARE: ${SMB_SHARE:?Set SMB_SHARE}
+    #   # Use DOMAIN\\username for domain accounts; local NAS accounts need only username.
     #   SMB_CREDENTIAL_USERNAME: ${SMB_CREDENTIAL_USERNAME:?Set SMB_CREDENTIAL_USERNAME}
     #   SMB_CREDENTIAL_PASSWORD: ${SMB_CREDENTIAL_PASSWORD:?Set SMB_CREDENTIAL_PASSWORD}
     ports:

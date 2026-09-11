@@ -34,8 +34,8 @@ Alle Varianten stehen kommentiert in **compose-template.yml**. Die tatsächlich 
 1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen; das Datenvolume beibehalten.
 2. Die gemeinsamen Mount-Einstellungen aus der Vorlage übernehmen: Startbenutzer `0:0`, `SYS_ADMIN`, `SETUID`, `SETGID` und das dort angegebene `security_opt`.
 3. Genau eine `environment`-Variante übernehmen: `SOURCE_MOUNT: nfs` oder `SOURCE_MOUNT: smb`.
-4. NFS-Server und Export beziehungsweise SMB-Server und Freigabe in `.env` eintragen. Für SMB zusätzlich die vollständige SMB-`cap_add`-Zeile (einschließlich `DAC_READ_SEARCH`, `DAC_OVERRIDE`) und die Secret-Definition aus der Vorlage in `compose.yml` übernehmen.
-5. `docker compose up -d --build --force-recreate` ausführen. In der GUI die Download-Quelle **NFS / SMB** auswählen und den Emby-Quellpfad setzen.
+4. NFS-Server und Export beziehungsweise SMB-Server und Freigabe sowie die Mount-Credentials in `.env` eintragen. Für SMB zusätzlich die vollständige SMB-`cap_add`-Zeile (einschließlich `DAC_READ_SEARCH`, `DAC_OVERRIDE`) und die Secret-Definition aus der Vorlage in `compose.yml` übernehmen.
+5. `docker compose up -d --build --force-recreate` ausführen. Die Download-Quelle und der Emby-Quellpfad werden anschließend unter **Settings → Connection** gespeichert; diese Werte gehören nicht in `.env`.
 
 Der Startprozess mountet schreibgeschützt nach `/media` und wechselt anschließend auf UID/GID `10001:10001`. Bei einem Mount-Fehler startet die Anwendung nicht. Ein bereits belegtes `/media` wird nicht übermountet. Die Webanwendung führt keine Mount-Befehle aus.
 
@@ -46,6 +46,8 @@ Der Startprozess mountet schreibgeschützt nach `/media` und wechselt anschließ
 ### SMB
 
 `SMB_SERVER` ist ein Hostname oder eine IPv4-Adresse; `SMB_SHARE` der Freigabename. SMB 3.1.1 wird verwendet. Setze `SMB_CREDENTIAL_USERNAME` und `SMB_CREDENTIAL_PASSWORD` in der lokalen `.env`; das Startskript schreibt sie nur während des Mounts in eine temporäre Datei mit Modus 0600 und entfernt sie danach. Die Werte gehören nie ins Repository oder Image.
+
+Bei Domänenkonten kann der Benutzer im Format `DOMAIN\\username` angegeben werden, zum Beispiel `ALONSO\\SMBvloader`. Das Startskript schreibt diesen Wert für `mount.cifs` als getrennte `domain=`- und `username=`-Einträge. Bei lokalen NAS-Konten genügt der reine Benutzername. Ein Emby-Benutzer ist nicht automatisch ein gültiges NAS-SMB-Konto.
 
 Es ist kein manuelles Mounten auf dem Host erforderlich. Der Docker-Host muss jedoch Kernel-Unterstützung für NFS beziehungsweise CIFS bereitstellen. Die optionalen Mount-Capabilities gelten nur für die konfigurierte Freigabe; der Webprozess läuft ohne Root-Rechte. Ohne NFS/SMB-Aktivierung sind diese zusätzlichen Rechte nicht nötig.
 
