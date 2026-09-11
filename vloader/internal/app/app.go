@@ -71,7 +71,7 @@ type Item struct {
 		Container string
 		Size      int64
 	}
-	MediaStreams      []struct {
+	MediaStreams []struct {
 		Type         string
 		Codec        string
 		Language     string
@@ -104,7 +104,9 @@ type session struct {
 	User   string
 	Expiry time.Time
 }
+
 var sessionRoles sync.Map
+
 type flow struct {
 	Nonce, Verifier string
 	Expiry          time.Time
@@ -197,7 +199,9 @@ func (a *App) scheduler() {
 	for {
 		c := a.config()
 		minutes := c.SyncIntervalMinutes
-		if minutes < 5 { minutes = 60 }
+		if minutes < 5 {
+			minutes = 60
+		}
 		t := time.NewTimer(time.Duration(minutes) * time.Minute)
 		<-t.C
 		if a.config().SyncEnabled && a.config().EmbyURL != "" {
@@ -209,7 +213,9 @@ func (a *App) syncBackground() {
 	r := httptest.NewRequest(http.MethodPost, "/api/sync", nil)
 	w := httptest.NewRecorder()
 	a.syncCatalog(w, r)
-	if w.Code >= 300 { log.Printf("scheduled sync failed: %s", w.Body.String()) }
+	if w.Code >= 300 {
+		log.Printf("scheduled sync failed: %s", w.Body.String())
+	}
 }
 func (a *App) configureOIDC(c Config) error {
 	if issuer := c.OIDCIssuer; issuer != "" {
@@ -298,7 +304,23 @@ func (a *App) user(r *http.Request) string {
 	}
 	return s.User
 }
-func (a *App) role(r *http.Request) string { c, e := r.Cookie("vloader_session"); if e != nil { return "" }; a.mu.RLock(); s := a.sessions[c.Value]; a.mu.RUnlock(); if time.Now().After(s.Expiry) { return "" }; role, _ := sessionRoles.Load(c.Value); if role == nil { return "admin" }; return role.(string) }
+func (a *App) role(r *http.Request) string {
+	c, e := r.Cookie("vloader_session")
+	if e != nil {
+		return ""
+	}
+	a.mu.RLock()
+	s := a.sessions[c.Value]
+	a.mu.RUnlock()
+	if time.Now().After(s.Expiry) {
+		return ""
+	}
+	role, _ := sessionRoles.Load(c.Value)
+	if role == nil {
+		return "admin"
+	}
+	return role.(string)
+}
 func (a *App) guard(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.user(r) == "" {
@@ -308,9 +330,21 @@ func (a *App) guard(h http.Handler) http.Handler {
 		h.ServeHTTP(w, r)
 	})
 }
-func (a *App) adminGuard(h http.Handler) http.Handler { return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { if a.user(r)=="" { fail(w,401,"Sign-in required"); return }; if a.role(r)!="admin" { fail(w,403,"Administrator access required"); return }; h.ServeHTTP(w,r) }) }
+func (a *App) adminGuard(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.user(r) == "" {
+			fail(w, 401, "Sign-in required")
+			return
+		}
+		if a.role(r) != "admin" {
+			fail(w, 403, "Administrator access required")
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
-	jsonOut(w, map[string]any{"user": a.user(r), "role": a.role(r), "admin": a.role(r)=="admin", "oidc": a.oauth != nil, "localAuth": a.localAuth})
+	jsonOut(w, map[string]any{"user": a.user(r), "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth})
 }
 func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role string) {
 	a.mu.Lock()
@@ -432,7 +466,11 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	role := "user"
-	for _, sub := range strings.Split(a.config().OIDCAdminSubjects, ",") { if strings.TrimSpace(sub) == id.Subject { role = "admin" } }
+	for _, sub := range strings.Split(a.config().OIDCAdminSubjects, ",") {
+		if strings.TrimSpace(sub) == id.Subject {
+			role = "admin"
+		}
+	}
 	a.issue(w, r, id.Subject, role)
 	http.Redirect(w, r, "/", 303)
 }
@@ -465,9 +503,16 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 	old := a.config()
-	if c.SyncIntervalMinutes == 0 { c.SyncIntervalMinutes = old.SyncIntervalMinutes }
-	if c.SyncIntervalMinutes == 0 { c.SyncIntervalMinutes = 60 }
-	if c.SyncIntervalMinutes < 5 || c.SyncIntervalMinutes > 10080 { fail(w, 400, "Sync interval must be between 5 minutes and 7 days"); return }
+	if c.SyncIntervalMinutes == 0 {
+		c.SyncIntervalMinutes = old.SyncIntervalMinutes
+	}
+	if c.SyncIntervalMinutes == 0 {
+		c.SyncIntervalMinutes = 60
+	}
+	if c.SyncIntervalMinutes < 5 || c.SyncIntervalMinutes > 10080 {
+		fail(w, 400, "Sync interval must be between 5 minutes and 7 days")
+		return
+	}
 	if !c.UpdateOIDC {
 		c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCAllowedSubjects, c.OIDCAdminSubjects = old.OIDCIssuer, old.OIDCClientID, old.OIDCClientSecret, old.OIDCAllowedSubjects, old.OIDCAdminSubjects
 	}
@@ -508,7 +553,9 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	a.cfg = c
 	a.mu.Unlock()
-	if c.EmbyURL != "" && (old.EmbyURL == "" || old.APIKey == "" || a.catalog.Updated.IsZero()) { go a.syncBackground() }
+	if c.EmbyURL != "" && (old.EmbyURL == "" || old.APIKey == "" || a.catalog.Updated.IsZero()) {
+		go a.syncBackground()
+	}
 	jsonOut(w, map[string]bool{"ok": true})
 }
 func (a *App) emby(ctx context.Context, c Config, endpoint string) (*http.Response, error) {
