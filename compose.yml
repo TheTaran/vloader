@@ -7,6 +7,7 @@ services:
     env_file: .env
     environment:
       LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED}
+      DATA_DIR: /data/.vloader
       SOURCE_MOUNT: smb
       SMB_SERVER: ${SMB_SERVER}
       SMB_SHARE: ${SMB_SHARE}
@@ -19,7 +20,8 @@ services:
     ports:
       - "${BIND_ADDRESS}:${PORT}:8080"
     volumes:
-      - vloader-data:/data
+      # Persist settings.json and catalog.json on the host.
+      - /docker/vloader:/data
       # /media is mounted from SMB by the entrypoint.
     read_only: true
     tmpfs:
@@ -37,5 +39,3 @@ services:
       options:
         max-size: 10m
         max-file: '3'
-volumes:
-  vloader-data:

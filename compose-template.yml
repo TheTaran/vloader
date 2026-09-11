@@ -7,6 +7,7 @@ services:
     env_file: .env
     environment:
       LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
+      DATA_DIR: /data/.vloader
     # Optional network source: copy ONE configuration below into compose.yml.
     # Remove the /media bind mount below when SOURCE_MOUNT is nfs or smb.
     # Add these common startup settings for either network source:
@@ -37,8 +38,8 @@ services:
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
     volumes:
-      - vloader-data:/data
-      - ${MEDIA_PATH:-./media}:/media:ro
+      # Bind this to a host directory so Settings and the catalog survive container replacement.
+      - ${VLOADER_DATA_DIR:-./data}:/data
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid
@@ -57,8 +58,5 @@ services:
       options:
         max-size: 10m
         max-file: '3'
-volumes:
-  vloader-data:
-
 # SMB credentials are passed as environment variables and are written only to a
 # mode-0600 temporary credentials file while the SMB mount is established.

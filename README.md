@@ -31,7 +31,7 @@ Alle Varianten stehen kommentiert in **compose-template.yml**. Die tatsächlich 
 
 ### Freigabe aktivieren
 
-1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen; das Datenvolume beibehalten.
+1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen. Den `/data`-Bind-Mount beibehalten; dort werden `settings.json` und `catalog.json` auf dem Host gespeichert.
 2. Die gemeinsamen Mount-Einstellungen aus der Vorlage übernehmen: Startbenutzer `0:0`, `SYS_ADMIN`, `SETUID`, `SETGID` und das dort angegebene `security_opt`.
 3. Genau eine `environment`-Variante übernehmen: `SOURCE_MOUNT: nfs` oder `SOURCE_MOUNT: smb`.
 4. NFS-Server und Export beziehungsweise SMB-Server und Freigabe sowie die Mount-Credentials in `.env` eintragen. Für SMB zusätzlich die vollständige SMB-`cap_add`-Zeile (einschließlich `DAC_READ_SEARCH`, `DAC_OVERRIDE`) und die Secret-Definition aus der Vorlage in `compose.yml` übernehmen.

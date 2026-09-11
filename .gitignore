@@ -50,3 +50,8 @@ __pycache__/
 # Local network-share credentials
 secrets/
 *.credentials
+
+settings.json
+catalog.json
+
+.vloader/
