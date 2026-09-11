@@ -5,6 +5,8 @@ services:
     image: vloader:dev
     restart: unless-stopped
     env_file: .env
+    environment:
+      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
     # To use NFS/SMB, copy the chosen settings from compose-template.yml here.
     # Network mounting runs inside this image; remove the /media bind below.
     ports:

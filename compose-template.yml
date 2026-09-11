@@ -5,6 +5,8 @@ services:
     image: vloader:dev
     restart: unless-stopped
     env_file: .env
+    environment:
+      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
     # Optional network source: copy ONE configuration below into compose.yml.
     # Remove the /media bind mount below when SOURCE_MOUNT is nfs or smb.
     # Add these common startup settings for either network source:
@@ -31,9 +33,8 @@ services:
     #   SOURCE_MODE: mount
     #   SMB_SERVER: ${SMB_SERVER:?Set SMB_SERVER}
     #   SMB_SHARE: ${SMB_SHARE:?Set SMB_SHARE}
-    # secrets:
-    #   - smb_credentials
-    # Also copy the top-level secrets definition at the end of this template.
+    #   SMB_CREDENTIAL_USERNAME: ${SMB_CREDENTIAL_USERNAME:?Set SMB_CREDENTIAL_USERNAME}
+    #   SMB_CREDENTIAL_PASSWORD: ${SMB_CREDENTIAL_PASSWORD:?Set SMB_CREDENTIAL_PASSWORD}
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
     volumes:
@@ -60,9 +61,5 @@ services:
 volumes:
   vloader-data:
 
-# SMB only: credentials are a read-only Docker secret, never image content.
-# Create the host file with username=..., password=..., optional domain=... .
-# Protect it with mode 0600 and never commit it.
-# secrets:
-#   smb_credentials:
-#     file: ${SMB_CREDENTIALS_FILE:?Set SMB_CREDENTIALS_FILE}
+# SMB credentials are passed as environment variables and are written only to a
+# mode-0600 temporary credentials file while the SMB mount is established.

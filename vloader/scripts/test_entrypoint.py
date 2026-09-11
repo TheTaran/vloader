@@ -18,8 +18,7 @@ class EntrypointTest(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + ":" + os.environ["PATH"],
                         SOURCE_MOUNT="none", FAKE_UID="0", MOUNT_FAIL="0",
                         MOUNT_MARKER=str(self.root / "mounted"), LOG=str(self.root / "log"),
-                        SMB_CREDENTIALS_PATH=str(self.root / "credentials"))
-        (self.root / "credentials").write_text("username=test\npassword=never-log-this\n")
+                        SMB_CREDENTIAL_USERNAME="test", SMB_CREDENTIAL_PASSWORD="never-log-this")
         self.command("id", 'echo "$FAKE_UID"')
         self.command("mountpoint", '[ -f "$MOUNT_MARKER" ]')
         for helper in ("mount.nfs", "mount.cifs"):
@@ -55,7 +54,7 @@ class EntrypointTest(unittest.TestCase):
         self.assertIn("ro,nosuid,nodev,noexec,nfsvers=4", self.log())
         self.assertTrue(self.log().endswith("drop:10001:10001\napp:mount\n"))
 
-    def test_smb_uses_secret_file_not_password_arguments(self):
+    def test_smb_uses_temporary_credentials_file_not_password_arguments(self):
         result = self.run_start(SOURCE_MOUNT="smb", SMB_SERVER="nas.local", SMB_SHARE="Movie Share")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("//nas.local/Movie Share\n/media\n", self.log())
@@ -70,11 +69,11 @@ class EntrypointTest(unittest.TestCase):
 
     def test_missing_credentials_and_nonroot_mount_rejected(self):
         for values in (
-            dict(SOURCE_MOUNT="smb", SMB_SERVER="nas", SMB_SHARE="films", SMB_CREDENTIALS_PATH="/missing"),
+            dict(SOURCE_MOUNT="smb", SMB_SERVER="nas", SMB_SHARE="films", SMB_CREDENTIAL_USERNAME="", SMB_CREDENTIAL_PASSWORD="password"),
             dict(SOURCE_MOUNT="nfs", NFS_SERVER="nas", NFS_EXPORT="/films", FAKE_UID="10001"),
             dict(SOURCE_MOUNT="invalid"),
             dict(SOURCE_MOUNT="nfs", NFS_SERVER="-o,rw", NFS_EXPORT="/films"),
-            dict(SOURCE_MOUNT="smb", SMB_SERVER="nas", SMB_SHARE="films", SMB_CREDENTIALS_PATH="/tmp/file,rw"),
+            dict(SOURCE_MOUNT="smb", SMB_SERVER="nas", SMB_SHARE="films", SMB_CREDENTIAL_USERNAME="user", SMB_CREDENTIAL_PASSWORD=""),
         ):
             with self.subTest(values=values):
                 self.assertNotEqual(self.run_start(**values).returncode, 0)

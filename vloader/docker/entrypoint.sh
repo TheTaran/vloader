@@ -26,14 +26,18 @@ case "$mode" in
             smb)
                 valid_server "${SMB_SERVER:-}"
                 case "${SMB_SHARE:-}" in ''|*/*|.|..) fail 'SMB_SHARE must name one share';; esac
-                credentials="${SMB_CREDENTIALS_PATH:-/run/secrets/smb_credentials}"
-                case "$credentials" in /*) ;; *) fail 'SMB credentials path must be absolute';; esac
-                case "$credentials" in *[!a-zA-Z0-9_./-]*) fail 'Invalid SMB credentials path';; esac
-                [ -r "$credentials" ] || fail 'SMB credentials secret is missing'
+                [ -n "${SMB_CREDENTIAL_USERNAME:-}" ] || fail 'SMB_CREDENTIAL_USERNAME is required'
+                [ -n "${SMB_CREDENTIAL_PASSWORD:-}" ] || fail 'SMB_CREDENTIAL_PASSWORD is required'
+                credentials=/tmp/smb-credentials
+                umask 077
+                printf 'username=%s\npassword=%s\n' "$SMB_CREDENTIAL_USERNAME" "$SMB_CREDENTIAL_PASSWORD" > "$credentials"
+                trap 'rm -f "$credentials"' EXIT
                 echo 'vloader: mounting read-only SMB source'
                 timeout 30 mount.cifs "//${SMB_SERVER}/${SMB_SHARE}" /media -n \
                     -o "credentials=${credentials},vers=3.1.1,ro,nosuid,nodev,noexec,uid=10001,gid=10001,file_mode=0440,dir_mode=0550" \
                     || fail 'SMB mount failed; verify server, share, credentials, host CIFS support and mount permissions'
+                rm -f "$credentials"
+                trap - EXIT
                 ;;
         esac
         # A failed or missing mount must never fall through to an empty local directory.

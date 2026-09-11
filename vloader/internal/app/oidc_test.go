@@ -40,7 +40,7 @@ func TestOIDCFlowValidation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := testApp(t)
-			t.Setenv("OIDC_ALLOWED_SUBJECTS", "allowed-sub")
+			a.cfg.OIDCAllowedSubjects = "allowed-sub"
 			var issuer string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {

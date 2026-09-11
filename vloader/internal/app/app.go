@@ -30,10 +30,15 @@ import (
 var assets embed.FS
 
 type Config struct {
-	EmbyURL      string
-	APIKey       string
-	SourcePrefix string
-	SourceMode   string
+	EmbyURL             string
+	APIKey              string
+	SourcePrefix        string
+	SourceMode          string
+	OIDCIssuer          string
+	OIDCClientID        string
+	OIDCClientSecret    string
+	OIDCAllowedSubjects string
+	UpdateOIDC          bool
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
@@ -50,6 +55,10 @@ type Item struct {
 	BackdropImageTags []string
 	ParentID          string `json:"ParentId"`
 	LibraryID         string `json:"LibraryId"`
+	SeriesID          string `json:"SeriesId"`
+	SeasonID          string `json:"SeasonId"`
+	IndexNumber       int
+	ParentIndexNumber int
 	IsFolder          bool
 	MediaSources      []struct {
 		Path      string
@@ -87,19 +96,20 @@ type flow struct {
 	Expiry          time.Time
 }
 type App struct {
-	mu       sync.RWMutex
-	syncMu   sync.Mutex
-	cfg      Config
-	catalog  Catalog
-	sessions map[string]session
-	flows    map[string]flow
-	attempts map[string]time.Time
-	password []byte
-	origin   string
-	data     string
-	client   *http.Client
-	oauth    *oauth2.Config
-	verifier *oidc.IDTokenVerifier
+	mu        sync.RWMutex
+	syncMu    sync.Mutex
+	cfg       Config
+	catalog   Catalog
+	sessions  map[string]session
+	flows     map[string]flow
+	attempts  map[string]time.Time
+	password  []byte
+	localAuth bool
+	origin    string
+	data      string
+	client    *http.Client
+	oauth     *oauth2.Config
+	verifier  *oidc.IDTokenVerifier
 }
 
 func random() string {
@@ -133,7 +143,7 @@ func New() (*App, error) {
 	if e = os.MkdirAll(a.data, 0700); e != nil {
 		return nil, e
 	}
-	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby")}
+	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS")}
 	if b, e := os.ReadFile(a.data + "/settings.json"); e == nil {
 		if e = json.Unmarshal(b, &a.cfg); e != nil {
 			return nil, e
@@ -144,28 +154,42 @@ func New() (*App, error) {
 			return nil, e
 		}
 	}
-	p := os.Getenv("ADMIN_PASSWORD")
-	if len(p) < 16 {
-		return nil, errors.New("ADMIN_PASSWORD must contain at least 16 characters")
+	a.localAuth = env("LOCAL_AUTH_ENABLED", "true") == "true"
+	if a.localAuth {
+		p := os.Getenv("ADMIN_PASSWORD")
+		if len(p) < 16 {
+			return nil, errors.New("ADMIN_PASSWORD must contain at least 16 characters when local authentication is enabled")
+		}
+		a.password, e = bcrypt.GenerateFromPassword([]byte(p), bcrypt.DefaultCost)
+		if e != nil {
+			return nil, e
+		}
 	}
-	a.password, e = bcrypt.GenerateFromPassword([]byte(p), bcrypt.DefaultCost)
-	if e != nil {
+	if e = a.configureOIDC(a.cfg); e != nil {
 		return nil, e
 	}
-	if issuer := os.Getenv("OIDC_ISSUER"); issuer != "" {
+	if !a.localAuth && a.oauth == nil {
+		return nil, errors.New("enable local authentication or configure OIDC")
+	}
+	return a, nil
+}
+func (a *App) configureOIDC(c Config) error {
+	if issuer := c.OIDCIssuer; issuer != "" {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		provider, e := oidc.NewProvider(ctx, issuer)
 		if e != nil {
-			return nil, errors.New("OIDC discovery failed")
+			return errors.New("OIDC discovery failed")
 		}
-		if os.Getenv("OIDC_CLIENT_ID") == "" || os.Getenv("OIDC_ALLOWED_SUBJECTS") == "" {
-			return nil, errors.New("OIDC_CLIENT_ID and OIDC_ALLOWED_SUBJECTS required")
+		if c.OIDCClientID == "" || c.OIDCAllowedSubjects == "" {
+			return errors.New("OIDC_CLIENT_ID and OIDC_ALLOWED_SUBJECTS required")
 		}
-		a.oauth = &oauth2.Config{ClientID: os.Getenv("OIDC_CLIENT_ID"), ClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), Endpoint: provider.Endpoint(), RedirectURL: a.origin + "/auth/callback", Scopes: []string{oidc.ScopeOpenID, "profile"}}
+		a.oauth = &oauth2.Config{ClientID: c.OIDCClientID, ClientSecret: c.OIDCClientSecret, Endpoint: provider.Endpoint(), RedirectURL: a.origin + "/auth/callback", Scopes: []string{oidc.ScopeOpenID, "profile"}}
 		a.verifier = provider.Verifier(&oidc.Config{ClientID: a.oauth.ClientID})
+	} else {
+		a.oauth, a.verifier = nil, nil
 	}
-	return a, nil
+	return nil
 }
 func jsonOut(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -246,7 +270,7 @@ func (a *App) guard(h http.Handler) http.Handler {
 	})
 }
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
-	jsonOut(w, map[string]any{"user": a.user(r), "oidc": a.oauth != nil})
+	jsonOut(w, map[string]any{"user": a.user(r), "oidc": a.oauth != nil, "localAuth": a.localAuth})
 }
 func (a *App) issue(w http.ResponseWriter, r *http.Request, user string) {
 	a.mu.Lock()
@@ -268,6 +292,10 @@ func (a *App) issue(w http.ResponseWriter, r *http.Request, user string) {
 	http.SetCookie(w, &http.Cookie{Name: "vloader_session", Value: key, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(a.origin, "https:"), SameSite: http.SameSiteLaxMode, MaxAge: 43200})
 }
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
+	if !a.localAuth {
+		fail(w, 404, "Local authentication is disabled")
+		return
+	}
 	var in struct{ Username, Password string }
 	if !decode(w, r, &in) {
 		return
@@ -353,7 +381,7 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowed := false
-	for _, sub := range strings.Split(os.Getenv("OIDC_ALLOWED_SUBJECTS"), ",") {
+	for _, sub := range strings.Split(a.config().OIDCAllowedSubjects, ",") {
 		if strings.TrimSpace(sub) == id.Subject {
 			allowed = true
 		}
@@ -368,7 +396,7 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c := a.config()
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDC": a.oauth != nil})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "LocalAuth": a.localAuth})
 }
 func persist(file string, v any) error {
 	b, e := json.Marshal(v)
@@ -394,6 +422,9 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 	old := a.config()
+	if !c.UpdateOIDC {
+		c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCAllowedSubjects = old.OIDCIssuer, old.OIDCClientID, old.OIDCClientSecret, old.OIDCAllowedSubjects
+	}
 	if c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
 			fail(w, 400, "Enter the API key again when switching servers")
@@ -403,6 +434,25 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if c.APIKey == "" {
 		fail(w, 400, "API key is required")
+		return
+	}
+	if c.OIDCClientSecret == "" {
+		c.OIDCClientSecret = old.OIDCClientSecret
+	}
+	if c.OIDCIssuer != "" && (c.OIDCClientID == "" || c.OIDCAllowedSubjects == "") {
+		fail(w, 400, "OIDC client ID and allowed subjects are required")
+		return
+	}
+	if !a.localAuth && c.OIDCIssuer == "" {
+		fail(w, 400, "OIDC cannot be removed while local authentication is disabled")
+		return
+	}
+	if e := a.configureOIDC(c); e != nil {
+		fail(w, 400, e.Error())
+		return
+	}
+	if !a.localAuth && a.oauth == nil {
+		fail(w, 400, "Configure OIDC before disabling local authentication")
 		return
 	}
 	if e := persist(a.data+"/settings.json", c); e != nil {

@@ -45,7 +45,7 @@ Der Startprozess mountet schreibgeschützt nach `/media` und wechselt anschließ
 
 ### SMB
 
-`SMB_SERVER` ist ein Hostname oder eine IPv4-Adresse; `SMB_SHARE` der Freigabename. SMB 3.1.1 wird verwendet. Eine lokale Datei mit `username=...`, `password=...` und optional `domain=...` erstellen und mit Modus 0600 schützen. `SMB_CREDENTIALS_FILE` in `.env` bezeichnet diese Hostdatei; Compose reicht sie als schreibgeschütztes Secret `/run/secrets/smb_credentials` weiter. Sie gehört weder ins Repository noch ins Image. Dateien unter `secrets/` und `*.credentials` sind ausgeschlossen.
+`SMB_SERVER` ist ein Hostname oder eine IPv4-Adresse; `SMB_SHARE` der Freigabename. SMB 3.1.1 wird verwendet. Setze `SMB_CREDENTIAL_USERNAME` und `SMB_CREDENTIAL_PASSWORD` in der lokalen `.env`; das Startskript schreibt sie nur während des Mounts in eine temporäre Datei mit Modus 0600 und entfernt sie danach. Die Werte gehören nie ins Repository oder Image.
 
 Es ist kein manuelles Mounten auf dem Host erforderlich. Der Docker-Host muss jedoch Kernel-Unterstützung für NFS beziehungsweise CIFS bereitstellen. Die optionalen Mount-Capabilities gelten nur für die konfigurierte Freigabe; der Webprozess läuft ohne Root-Rechte. Ohne NFS/SMB-Aktivierung sind diese zusätzlichen Rechte nicht nötig.
 
@@ -60,7 +60,7 @@ OIDC_CLIENT_SECRET=
 OIDC_ALLOWED_SUBJECTS=stable-subject-id-1,stable-subject-id-2
 ```
 
-Redirect-URI beim Provider: `${APP_URL}/auth/callback`. Authorization Code Flow mit PKCE S256 und `openid profile` aktivieren. Bei einem vertraulichen Client das Client-Secret setzen. Die erlaubten Werte sind die stabilen `sub`-Claims, nicht E-Mail-Adressen. Nach Änderungen Container mit `docker compose up -d --force-recreate` neu erstellen. OIDC ist erst sichtbar, wenn eingerichtet; fehlerhafte Discovery verhindert einen irreführend funktionierenden Start.
+Redirect-URI beim Provider: `${APP_URL}/auth/callback`. Authorization Code Flow mit PKCE S256 und `openid profile` aktivieren. Bei einem vertraulichen Client das Client-Secret setzen. Die erlaubten Werte sind die stabilen `sub`-Claims, nicht E-Mail-Adressen. Die Werte können danach auch im Bereich **Settings → Authentication** gepflegt werden; das Secret wird niemals an den Browser zurückgegeben.
 
 Alle zugelassenen Benutzer besitzen Administratorrechte und können die gesamte konfigurierte Sammlung sehen. Es gibt keine Übernahme individueller Emby-Benutzerrechte. Siehe [SECURITY.md](SECURITY.md).
 
@@ -72,7 +72,7 @@ Alle zugelassenen Benutzer besitzen Administratorrechte und können die gesamte 
 - `Security.md`, `SECURITY.md`: Sicherheitshinweise und Meldeverfahren.
 - `vloader/docs/`: Architektur und Teststrategie.
 
-Gespeicherte GUI-Einstellungen überschreiben Emby-/Quellen-Startwerte aus `.env`; Änderungen danach über die GUI vornehmen. OIDC und lokale Zugangsdaten bleiben ausschließlich Umgebungswerte. Ein Serverwechsel verlangt die erneute Eingabe eines API-Schlüssels und eine neue Synchronisierung.
+Gespeicherte GUI-Einstellungen überschreiben Emby-/Quellen-Startwerte aus `.env`; Änderungen danach über die GUI vornehmen. Lokale Anmeldung wird über `LOCAL_AUTH_ENABLED=true|false` in Compose gesteuert. Bei `false` muss eine vollständige OIDC-Konfiguration vorhanden sein. Ein Serverwechsel verlangt die erneute Eingabe eines API-Schlüssels und eine neue Synchronisierung.
 
 ## Entwicklung und Tests
 
