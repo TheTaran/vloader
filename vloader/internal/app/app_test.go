@@ -19,6 +19,7 @@ func testApp(t *testing.T) *App {
 	t.Setenv("APP_URL", "http://localhost:8090")
 	t.Setenv("ADMIN_PASSWORD", "test-password-strong-123")
 	t.Setenv("OIDC_ISSUER", "")
+	t.Setenv("VLOADER_DISABLE_SCHEDULER", "true")
 	a, e := New()
 	if e != nil {
 		t.Fatal(e)

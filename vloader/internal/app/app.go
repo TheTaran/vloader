@@ -192,7 +192,9 @@ func New() (*App, error) {
 	if !a.localAuth && a.oauth == nil {
 		return nil, errors.New("enable local authentication or configure OIDC")
 	}
-	go a.scheduler()
+	if os.Getenv("VLOADER_DISABLE_SCHEDULER") != "true" {
+		go a.scheduler()
+	}
 	return a, nil
 }
 func (a *App) scheduler() {
