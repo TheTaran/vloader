@@ -1,4 +1,6 @@
 ## Unreleased
+
+## v0.1.14
 - Make All content a latest-updates dashboard for movies and series, newest first; configure its 1–365 day window in Settings (default 14 days).
 - Email requesters when an Emby sync first finds their movie or series; use a verified OIDC email claim and prevent duplicate notices on later syncs.
 
