@@ -47,6 +47,7 @@ type Config struct {
 	UpdateOIDC          bool
 	SyncEnabled         bool
 	SyncIntervalMinutes int
+	LatestUpdatesDays   int
 	AdminEmail          string
 	SMTPHost            string
 	SMTPPort            int
@@ -67,6 +68,7 @@ type Item struct {
 	Path              string
 	Overview          string
 	PremiereDate      string
+	DateCreated       time.Time
 	ProductionYear    int
 	CommunityRating   float64
 	RunTimeTicks      int64
@@ -116,22 +118,25 @@ type Catalog struct {
 	Updated   time.Time
 }
 type Wish struct {
-	ID            string    `json:"id"`
-	Requester     string    `json:"requester"`
-	RequesterName string    `json:"requesterName,omitempty"`
-	Title         string    `json:"title"`
-	Type          string    `json:"type"`
-	Source        string    `json:"source"`
-	ExternalID    string    `json:"externalId,omitempty"`
-	SourceURL     string    `json:"sourceUrl,omitempty"`
-	Status        string    `json:"status"`
-	ItemID        string    `json:"itemId,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID                    string    `json:"id"`
+	Requester             string    `json:"requester"`
+	RequesterName         string    `json:"requesterName,omitempty"`
+	RequesterEmail        string    `json:"requesterEmail,omitempty"`
+	AvailabilityEmailSent bool      `json:"availabilityEmailSent,omitempty"`
+	Title                 string    `json:"title"`
+	Type                  string    `json:"type"`
+	Source                string    `json:"source"`
+	ExternalID            string    `json:"externalId,omitempty"`
+	SourceURL             string    `json:"sourceUrl,omitempty"`
+	Status                string    `json:"status"`
+	ItemID                string    `json:"itemId,omitempty"`
+	CreatedAt             time.Time `json:"createdAt"`
+	UpdatedAt             time.Time `json:"updatedAt"`
 }
 type session struct {
 	User        string
 	DisplayName string
+	Email       string
 	Expiry      time.Time
 }
 
@@ -142,30 +147,31 @@ type flow struct {
 	Expiry          time.Time
 }
 type App struct {
-	mu            sync.RWMutex
-	syncMu        sync.Mutex
-	cfg           Config
-	catalog       Catalog
-	wishes        []Wish
-	wishMetadata  map[string]wishMetadataCache
-	tvdbToken     string
-	tvdbExpires   time.Time
-	tvdbKey       string
-	tvdbPIN       string
-	notifications chan Wish
-	sessions      map[string]session
-	roles         map[string]string
-	flows         map[string]flow
-	attempts      map[string]time.Time
-	password      []byte
-	localAuth     bool
-	origin        string
-	data          string
-	client        *http.Client
-	mediaRoot     string
-	oauth         *oauth2.Config
-	verifier      *oidc.IDTokenVerifier
-	version       string
+	mu                      sync.RWMutex
+	syncMu                  sync.Mutex
+	cfg                     Config
+	catalog                 Catalog
+	wishes                  []Wish
+	wishMetadata            map[string]wishMetadataCache
+	availabilityEmailQueued map[string]bool
+	tvdbToken               string
+	tvdbExpires             time.Time
+	tvdbKey                 string
+	tvdbPIN                 string
+	notifications           chan Wish
+	sessions                map[string]session
+	roles                   map[string]string
+	flows                   map[string]flow
+	attempts                map[string]time.Time
+	password                []byte
+	localAuth               bool
+	origin                  string
+	data                    string
+	client                  *http.Client
+	mediaRoot               string
+	oauth                   *oauth2.Config
+	verifier                *oidc.IDTokenVerifier
+	version                 string
 }
 
 func random() string {
@@ -192,7 +198,7 @@ func Run() {
 	log.Fatal(s.ListenAndServe())
 }
 func New() (*App, error) {
-	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, wishMetadata: map[string]wishMetadataCache{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, wishMetadata: map[string]wishMetadataCache{}, availabilityEmailQueued: map[string]bool{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
 	if !path.IsAbs(a.data) || a.data == "/" || a.data == a.mediaRoot || strings.HasPrefix(a.data, a.mediaRoot+"/") || strings.HasPrefix(a.mediaRoot, a.data+"/") {
 		return nil, errors.New("DATA_DIR must be an absolute path separate from the /media source mount")
 	}
@@ -210,6 +216,9 @@ func New() (*App, error) {
 	if a.cfg.SyncIntervalMinutes <= 0 {
 		a.cfg.SyncIntervalMinutes = 60
 		a.cfg.SyncEnabled = true
+	}
+	if a.cfg.LatestUpdatesDays <= 0 {
+		a.cfg.LatestUpdatesDays = 14
 	}
 	if e := loadState(a.data+"/catalog.json", &a.catalog); e != nil {
 		return nil, e
@@ -237,7 +246,21 @@ func New() (*App, error) {
 	if os.Getenv("VLOADER_DISABLE_SCHEDULER") != "true" {
 		go a.scheduler()
 	}
+	if a.cfg.EmbyURL != "" && a.cfg.APIKey != "" && a.catalogNeedsDateRefresh() {
+		go a.syncBackground()
+	}
 	return a, nil
+}
+
+func (a *App) catalogNeedsDateRefresh() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, item := range a.catalog.Items {
+		if (item.Type == "Movie" || item.Type == "Series") && item.DateCreated.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 func (a *App) scheduler() {
 	for {
@@ -273,7 +296,7 @@ func (a *App) configureOIDC(c Config) error {
 		if c.OIDCClientID == "" || (c.OIDCAllowedSubjects == "" && c.OIDCAllowedGroups == "" && c.OIDCAdminGroups == "") {
 			return errors.New("OIDC_CLIENT_ID and at least one allowed subject or group required")
 		}
-		scopes := []string{oidc.ScopeOpenID, "profile"}
+		scopes := []string{oidc.ScopeOpenID, "profile", "email"}
 		if c.OIDCAllowedGroups != "" || c.OIDCAdminGroups != "" {
 			scopes = append(scopes, "groups")
 		}
@@ -372,6 +395,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))
 	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
+	m.Handle("POST /api/settings/dashboard", a.adminGuard(http.HandlerFunc(a.saveDashboardSettings)))
 	m.Handle("POST /api/settings/notifications", a.adminGuard(http.HandlerFunc(a.saveNotificationSettings)))
 	m.Handle("POST /api/settings/metadata", a.adminGuard(http.HandlerFunc(a.saveMetadataSettings)))
 	m.Handle("POST /api/settings/notifications/test", a.adminGuard(http.HandlerFunc(a.testNotificationSettings)))
@@ -455,6 +479,21 @@ func (a *App) displayNameForUser(user string) string {
 	}
 	return user
 }
+func (a *App) emailForUser(user string) string {
+	if user == "" {
+		return ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	var email string
+	var latestExpiry time.Time
+	for _, s := range a.sessions {
+		if s.User == user && time.Now().Before(s.Expiry) && validEmail(s.Email) && s.Expiry.After(latestExpiry) {
+			email, latestExpiry = s.Email, s.Expiry
+		}
+	}
+	return email
+}
 func (a *App) role(r *http.Request) string {
 	c, e := r.Cookie("vloader_session")
 	if e != nil {
@@ -495,18 +534,19 @@ func (a *App) adminGuard(h http.Handler) http.Handler {
 	})
 }
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
-	name := a.displayNameForUser(a.user(r))
-	jsonOut(w, map[string]any{"user": name, "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth})
+	user := a.user(r)
+	name := a.displayNameForUser(user)
+	jsonOut(w, map[string]any{"user": name, "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth, "requesterEmailAvailable": a.emailForUser(user) != "", "latestUpdatesDays": a.config().LatestUpdatesDays})
 }
-func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role string, displayNames ...string) {
+func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role, displayName, email string) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	for k, s := range a.sessions {
 		if time.Now().After(s.Expiry) {
 			delete(a.sessions, k)
 		}
 	}
 	if len(a.sessions) >= 1000 {
+		a.mu.Unlock()
 		fail(w, 503, "Too many sessions")
 		return
 	}
@@ -514,12 +554,42 @@ func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role string, d
 		delete(a.sessions, c.Value)
 	}
 	key := random()
-	displayName := user
-	if len(displayNames) > 0 && strings.TrimSpace(displayNames[0]) != "" {
-		displayName = strings.TrimSpace(displayNames[0])
+	if strings.TrimSpace(displayName) == "" {
+		displayName = user
 	}
-	a.sessions[key] = session{User: user, DisplayName: displayName, Expiry: time.Now().Add(12 * time.Hour)}
+	if !validEmail(email) {
+		email = ""
+	}
+	a.sessions[key] = session{User: user, DisplayName: displayName, Email: email, Expiry: time.Now().Add(12 * time.Hour)}
+	var notices []Wish
+	if email != "" {
+		previous := append([]Wish(nil), a.wishes...)
+		changed := false
+		for i := range a.wishes {
+			wish := &a.wishes[i]
+			if wish.Requester == user && wish.RequesterEmail != email && (wish.Status == "pending" || wish.Status == "approved" || wish.Status == "available" && !wish.AvailabilityEmailSent) {
+				wish.RequesterEmail = email
+				changed = true
+			}
+		}
+		if changed {
+			if err := a.persistWishesLocked(); err != nil {
+				a.wishes = previous
+			} else {
+				for _, wish := range a.wishes {
+					if wish.Requester == user && wish.Status == "available" && !wish.AvailabilityEmailSent && !a.availabilityEmailQueued[wish.ID] {
+						a.availabilityEmailQueued[wish.ID] = true
+						notices = append(notices, wish)
+					}
+				}
+			}
+		}
+	}
 	sessionRoles.Store(key, role)
+	a.mu.Unlock()
+	for _, notice := range notices {
+		a.enqueueAvailabilityNotice(notice)
+	}
 	http.SetCookie(w, &http.Cookie{Name: "vloader_session", Value: key, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(a.origin, "https:"), SameSite: http.SameSiteLaxMode, MaxAge: 43200})
 }
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
@@ -545,7 +615,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "Sign-in failed")
 		return
 	}
-	a.issue(w, r, in.Username, "admin")
+	a.issue(w, r, in.Username, "admin", "", "")
 	jsonOut(w, map[string]bool{"ok": true})
 }
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
@@ -603,6 +673,22 @@ func oidcDisplayName(claims map[string]json.RawMessage, subject string) string {
 		}
 	}
 	return subject
+}
+
+func oidcVerifiedEmail(claims map[string]json.RawMessage) string {
+	var verified bool
+	if json.Unmarshal(claims["email_verified"], &verified) != nil || !verified {
+		return ""
+	}
+	var email string
+	if json.Unmarshal(claims["email"], &email) != nil {
+		return ""
+	}
+	email = strings.TrimSpace(email)
+	if !validEmail(email) {
+		return ""
+	}
+	return email
 }
 
 func hasExactCSVValue(csv, value string) bool {
@@ -685,7 +771,7 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if hasExactCSVValue(cfg.OIDCAdminSubjects, id.Subject) || hasAnyCSVValue(cfg.OIDCAdminGroups, groups) {
 		role = "admin"
 	}
-	a.issue(w, r, id.Subject, role, oidcDisplayName(tokenClaims, id.Subject))
+	a.issue(w, r, id.Subject, role, oidcDisplayName(tokenClaims, id.Subject), oidcVerifiedEmail(tokenClaims))
 	http.Redirect(w, r, "/", 303)
 }
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
@@ -695,7 +781,32 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if claim == "" {
 		claim = "groups"
 	}
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasTMDBAPIKey": c.TMDBAPIKey != "", "HasTVDBAPIKey": c.TVDBAPIKey != "", "HasTVDBPIN": c.TVDBPIN != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasTMDBAPIKey": c.TMDBAPIKey != "", "HasTVDBAPIKey": c.TVDBAPIKey != "", "HasTVDBPIN": c.TVDBPIN != ""})
+}
+
+func (a *App) saveDashboardSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		LatestUpdatesDays int `json:"LatestUpdatesDays"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if in.LatestUpdatesDays < 1 || in.LatestUpdatesDays > 365 {
+		fail(w, http.StatusBadRequest, "Latest updates period must be between 1 and 365 days")
+		return
+	}
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	c := a.config()
+	c.LatestUpdatesDays = in.LatestUpdatesDays
+	if err := persist(a.data+"/settings.json", c); err != nil {
+		fail(w, http.StatusInternalServerError, "Failed to save dashboard settings")
+		return
+	}
+	a.mu.Lock()
+	a.cfg = c
+	a.mu.Unlock()
+	jsonOut(w, map[string]bool{"ok": true})
 }
 
 func (a *App) saveMetadataSettings(w http.ResponseWriter, r *http.Request) {
@@ -862,6 +973,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if c.SyncIntervalMinutes == 0 {
 		c.SyncIntervalMinutes = 60
 	}
+	c.LatestUpdatesDays = old.LatestUpdatesDays
 	if c.SyncIntervalMinutes < 5 || c.SyncIntervalMinutes > 10080 {
 		fail(w, 400, "Sync interval must be between 5 minutes and 7 days")
 		return
@@ -984,7 +1096,7 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 				Items            []Item
 				TotalRecordCount int
 			}
-			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
+			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
 			if e := a.fetch(r.Context(), c, "/Items?"+q.Encode(), &page); e != nil {
 				fail(w, 502, e.Error())
 				return
@@ -1009,12 +1121,22 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	a.catalog = next
-	if a.resolveWishesLocked(next) {
+	previousWishes := append([]Wish(nil), a.wishes...)
+	notices, wishesChanged := a.resolveWishesLocked(next)
+	if wishesChanged {
 		if err := a.persistWishesLocked(); err != nil {
 			log.Printf("failed to persist wish availability: %v", err)
+			a.wishes = previousWishes
+			for _, wish := range notices {
+				delete(a.availabilityEmailQueued, wish.ID)
+			}
+			notices = nil
 		}
 	}
 	a.mu.Unlock()
+	for _, wish := range notices {
+		a.enqueueAvailabilityNotice(wish)
+	}
 	jsonOut(w, next)
 }
 func (a *App) sourceItem(id string) (Item, Config, bool) {

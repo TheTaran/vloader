@@ -155,3 +155,20 @@ func TestOIDCDisplayNamePrefersDisplayNameThenName(t *testing.T) {
 		})
 	}
 }
+
+func TestOIDCVerifiedEmailRequiresVerifiedValidAddress(t *testing.T) {
+	for _, tc := range []struct{ claims, want string }{
+		{`{"email":"viewer@example.com","email_verified":true}`, "viewer@example.com"},
+		{`{"email":"viewer@example.com","email_verified":false}`, ""},
+		{`{"email":"viewer@example.com"}`, ""},
+		{`{"email":"bad\r\nBcc:attacker@example.com","email_verified":true}`, ""},
+	} {
+		var claims map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(tc.claims), &claims); err != nil {
+			t.Fatal(err)
+		}
+		if got := oidcVerifiedEmail(claims); got != tc.want {
+			t.Errorf("oidcVerifiedEmail(%s) = %q, want %q", tc.claims, got, tc.want)
+		}
+	}
+}

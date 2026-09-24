@@ -20,8 +20,9 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 	}
 	defer listener.Close()
 	type serverResult struct {
-		message string
-		err     error
+		message   string
+		recipient string
+		err       error
 	}
 	result := make(chan serverResult, 1)
 	go func() {
@@ -33,6 +34,7 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 		defer conn.Close()
 		reader := bufio.NewReader(conn)
 		send := func(line string) error { _, err := fmt.Fprint(conn, line+"\r\n"); return err }
+		var recipient string
 		if err := send("220 test SMTP ready"); err != nil {
 			result <- serverResult{err: err}
 			return
@@ -60,6 +62,9 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 					result <- serverResult{err: err}
 					return
 				}
+				if strings.HasPrefix(command, "RCPT TO:") {
+					recipient = strings.TrimPrefix(command, "RCPT TO:")
+				}
 			case command == "DATA":
 				if err := send("354 continue"); err != nil {
 					result <- serverResult{err: err}
@@ -82,7 +87,7 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 				}
 			case command == "QUIT":
 				_ = send("221 bye")
-				result <- serverResult{message: message.String()}
+				result <- serverResult{message: message.String(), recipient: recipient}
 				return
 			default:
 				_ = send("500 unexpected command")
@@ -94,11 +99,12 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 
 	port := listener.Addr().(*net.TCPAddr).Port
 	cfg := Config{SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com", SMTPDisableTLS: true}
-	if err := sendSMTPMessage(cfg, "admin@example.com", "test", "plain transport test\r\n"); err != nil {
+	wish := Wish{RequesterEmail: "viewer@example.com", Title: "Requested Film", Type: "Movie"}
+	if err := sendWishAvailableNotification(cfg, "https://vloader.example.com", wish); err != nil {
 		t.Fatalf("plain SMTP send failed: %v", err)
 	}
 	got := <-result
-	if got.err != nil || !strings.Contains(got.message, "plain transport test") {
+	if got.err != nil || got.recipient != "<viewer@example.com>" || !strings.Contains(got.message, "Requested Film") || !strings.Contains(got.message, "available in Emby") {
 		t.Fatalf("plain SMTP server result = %#v", got)
 	}
 }
@@ -106,7 +112,7 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
-	a.sessions["user-session"] = session{User: "viewer", DisplayName: "Viewer Name", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", DisplayName: "Viewer Name", Email: "viewer@example.com", Expiry: time.Now().Add(time.Hour)}
 	sessionRoles.Store("user-session", "user")
 	t.Cleanup(func() { sessionRoles.Delete("user-session") })
 
@@ -114,8 +120,11 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	if created.Code != http.StatusOK {
 		t.Fatalf("create wish: %d %s", created.Code, created.Body.String())
 	}
+	if strings.Contains(created.Body.String(), "viewer@example.com") {
+		t.Fatal("request response exposed the requester's email address")
+	}
 	var wish Wish
-	if err := json.Unmarshal(created.Body.Bytes(), &wish); err != nil || wish.Requester != "viewer" || wish.RequesterName != "Viewer Name" || wish.Status != "pending" {
+	if err := json.Unmarshal(created.Body.Bytes(), &wish); err != nil || wish.Requester != "viewer" || wish.RequesterName != "Viewer Name" || wish.Status != "pending" || a.wishes[0].RequesterEmail != "viewer@example.com" {
 		t.Fatalf("invalid created wish: %+v err=%v", wish, err)
 	}
 	if len(a.notifications) != 1 {
@@ -131,6 +140,9 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 		}
 		if err := json.Unmarshal(listed.Body.Bytes(), &response); err != nil || len(response.Items) != tc.count {
 			t.Fatalf("list for %s: count=%d err=%v", tc.cookie, len(response.Items), err)
+		}
+		if strings.Contains(listed.Body.String(), "viewer@example.com") {
+			t.Fatal("request list exposed the requester's email address")
 		}
 		if tc.cookie == "admin-session" && response.Items[0].RequesterName != "Viewer Name" {
 			t.Fatalf("admin sees requester name %q, want display name", response.Items[0].RequesterName)
@@ -225,6 +237,13 @@ func TestSafeTVDBImageURLRejectsExternalHosts(t *testing.T) {
 	}
 	if got := safeTVDBImageURL("http://artworks.thetvdb.com/image.jpg"); got != "" {
 		t.Fatalf("accepted insecure artwork url: %q", got)
+	}
+}
+
+func TestRequesterEmailIsRedactedFromNotificationErrors(t *testing.T) {
+	got := redactRequesterEmail("550 mailbox viewer@example.com unavailable", "viewer@example.com")
+	if strings.Contains(got, "viewer@example.com") || !strings.Contains(got, "[email redacted]") {
+		t.Fatalf("requester email was not redacted from SMTP diagnostics: %q", got)
 	}
 }
 

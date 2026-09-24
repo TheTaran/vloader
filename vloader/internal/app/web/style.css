@@ -61,3 +61,5 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 .download-action.button.primary,.poster .download-indicator.download-action{box-sizing:border-box;height:25.5px;min-width:54.4px;padding:6.75px 9.75px;border-radius:4.25px;font-size:9px;line-height:12px;gap:0}
 
 .tmdb-attribution{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:6px 12px}.tmdb-credit-heading{grid-column:1/-1;font-size:12px;font-weight:500;color:var(--muted)}.tmdb-attribution .tmdb-logo-link{gap:8px;font-size:12px}.tmdb-attribution .tmdb-logo-link img{width:47px;height:34px}
+
+.collection-title{font-size:24px;margin:28px 0 0}

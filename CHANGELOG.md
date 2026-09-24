@@ -1,4 +1,6 @@
 ## Unreleased
+- Make All content a latest-updates dashboard for movies and series, newest first; configure its 1–365 day window in Settings (default 14 days).
+- Email requesters when an Emby sync first finds their movie or series; use a verified OIDC email claim and prevent duplicate notices on later syncs.
 
 ## v0.1.13
 - Show wide Emby artwork or TVDB banners on movie and series request cards; configure and store the TVDB API key and optional subscriber PIN in Metadata settings.

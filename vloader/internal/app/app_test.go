@@ -39,6 +39,8 @@ func TestRequestErrorsAreLoggedWithoutQueryString(t *testing.T) {
 func testApp(t *testing.T) *App {
 	t.Helper()
 	t.Setenv("DATA_DIR", t.TempDir())
+	t.Setenv("EMBY_URL", "")
+	t.Setenv("EMBY_API_KEY", "")
 	t.Setenv("APP_URL", "http://localhost:8090")
 	t.Setenv("ADMIN_PASSWORD", "test-password-strong-123")
 	t.Setenv("OIDC_ISSUER", "")
@@ -47,7 +49,35 @@ func testApp(t *testing.T) *App {
 	if e != nil {
 		t.Fatal(e)
 	}
+	if a.cfg.LatestUpdatesDays != 14 {
+		t.Fatalf("latest updates should default to 14 days, got %d", a.cfg.LatestUpdatesDays)
+	}
 	return a
+}
+
+func TestLatestUpdatesPeriodIsSavedAndValidated(t *testing.T) {
+	a := testApp(t)
+	a.cfg = Config{EmbyURL: "https://emby.example.test", APIKey: "test-key", SourceMode: "emby", SourcePrefix: "/video", SyncIntervalMinutes: 60, LatestUpdatesDays: 14}
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	body := `{"LatestUpdatesDays":30}`
+	if w := request(a, http.MethodPost, "/api/settings/dashboard", body, a.origin, "admin-session"); w.Code != http.StatusOK {
+		t.Fatalf("save latest updates period: %d %s", w.Code, w.Body.String())
+	}
+	if a.cfg.LatestUpdatesDays != 30 {
+		t.Fatalf("saved period is %d days, want 30", a.cfg.LatestUpdatesDays)
+	}
+	settings := request(a, http.MethodGet, "/api/settings", "", "", "admin-session")
+	if settings.Code != http.StatusOK || !strings.Contains(settings.Body.String(), `"LatestUpdatesDays":30`) {
+		t.Fatalf("saved period missing from settings: %d %s", settings.Code, settings.Body.String())
+	}
+	body = `{"LatestUpdatesDays":366}`
+	if w := request(a, http.MethodPost, "/api/settings/dashboard", body, a.origin, "admin-session"); w.Code != http.StatusBadRequest || a.cfg.LatestUpdatesDays != 30 {
+		t.Fatalf("invalid period was not rejected atomically: status=%d days=%d body=%s", w.Code, a.cfg.LatestUpdatesDays, w.Body.String())
+	}
+	body = `{"EmbyURL":"https://emby.example.test","APIKey":"test-key","SourceMode":"emby","SourcePrefix":"/video","SyncEnabled":true,"SyncIntervalMinutes":60}`
+	if w := request(a, http.MethodPost, "/api/settings", body, a.origin, "admin-session"); w.Code != http.StatusOK || a.cfg.LatestUpdatesDays != 30 {
+		t.Fatalf("connection save did not preserve dashboard period: status=%d days=%d body=%s", w.Code, a.cfg.LatestUpdatesDays, w.Body.String())
+	}
 }
 func request(a *App, method, target, body, origin, cookie string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
@@ -240,6 +270,9 @@ func TestEmbySyncPaginationAtomicityAndDownloads(t *testing.T) {
 		case "/Library/MediaFolders":
 			jsonOut(w, map[string]any{"Items": []Item{{ID: "lib", Name: "Movies"}}})
 		case "/Items":
+			if !strings.Contains(r.URL.Query().Get("Fields"), "DateCreated") {
+				t.Error("sync did not request Emby DateCreated for latest updates")
+			}
 			if broken {
 				w.WriteHeader(503)
 				return
@@ -248,7 +281,7 @@ func TestEmbySyncPaginationAtomicityAndDownloads(t *testing.T) {
 			if r.URL.Query().Get("StartIndex") == "1" {
 				id = "2"
 			}
-			jsonOut(w, map[string]any{"Items": []Item{{ID: id, Name: "Movie " + id, Path: "/source/a.mkv", Overview: "Full overview", ParentID: "original-parent", Genres: []string{"Drama"}}}, "TotalRecordCount": 2})
+			jsonOut(w, map[string]any{"Items": []Item{{ID: id, Name: "Movie " + id, Type: "Movie", Path: "/source/a.mkv", Overview: "Full overview", ParentID: "original-parent", Genres: []string{"Drama"}, DateCreated: time.Date(2026, 9, 24, 10, 0, 0, 0, time.UTC)}}, "TotalRecordCount": 2})
 		case "/Items/1/Download":
 			io.WriteString(w, "movie")
 		default:
@@ -257,13 +290,29 @@ func TestEmbySyncPaginationAtomicityAndDownloads(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg = Config{EmbyURL: server.URL, APIKey: "test-key", SourceMode: "emby"}
+	a.wishes = []Wish{{ID: "wish-1", Requester: "viewer", RequesterEmail: "viewer@example.com", Title: "Movie 1", Type: "Movie", Status: "approved"}}
 	a.sessions["key"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	w := request(a, "POST", "/api/sync", "{}", a.origin, "key")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if len(a.catalog.Items) != 2 || a.catalog.Items[0].Overview != "Full overview" || a.catalog.Items[0].ParentID != "original-parent" || a.catalog.Items[0].LibraryID != "lib" {
+	if len(a.catalog.Items) != 2 || a.catalog.Items[0].Overview != "Full overview" || a.catalog.Items[0].ParentID != "original-parent" || a.catalog.Items[0].LibraryID != "lib" || a.catalog.Items[0].DateCreated.IsZero() {
 		t.Fatal(a.catalog)
+	}
+	if len(a.notifications) != 1 || a.wishes[0].Status != "available" || a.wishes[0].ItemID != "1" {
+		t.Fatalf("newly available request was not saved and queued exactly once: wishes=%+v queue=%d", a.wishes, len(a.notifications))
+	}
+	if queued := <-a.notifications; queued.ID != "wish-1" || queued.Status != "available" || queued.RequesterEmail != "viewer@example.com" {
+		t.Fatalf("wrong availability email job was queued: %+v", queued)
+	}
+	a.finishAvailabilityNotice("wish-1", false)
+	if repeated := request(a, "POST", "/api/sync", "{}", a.origin, "key"); repeated.Code != http.StatusOK || len(a.notifications) != 1 {
+		t.Fatalf("failed availability email was not retried: status=%d queue=%d", repeated.Code, len(a.notifications))
+	}
+	<-a.notifications
+	a.finishAvailabilityNotice("wish-1", true)
+	if repeated := request(a, "POST", "/api/sync", "{}", a.origin, "key"); repeated.Code != http.StatusOK || len(a.notifications) != 0 || !a.wishes[0].AvailabilityEmailSent {
+		t.Fatalf("successful availability email was repeated: status=%d queue=%d wish=%+v", repeated.Code, len(a.notifications), a.wishes[0])
 	}
 	b, e := os.ReadFile(a.data + "/catalog.json")
 	if e != nil || !json.Valid(b) {

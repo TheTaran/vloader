@@ -52,6 +52,8 @@ func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
 			if wish.RequesterName == "" {
 				wish.RequesterName = displayNames[wish.Requester]
 			}
+			wish.RequesterEmail = ""
+			wish.AvailabilityEmailSent = false
 			items = append(items, wish)
 		}
 	}
@@ -439,7 +441,7 @@ func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().UTC()
 	requester := a.user(r)
-	wish := Wish{ID: random(), Requester: requester, RequesterName: a.displayNameForUser(requester), Title: in.Title, Type: in.Type, Source: in.Source, ExternalID: ref, SourceURL: sourceURL, Status: "pending", CreatedAt: now, UpdatedAt: now}
+	wish := Wish{ID: random(), Requester: requester, RequesterName: a.displayNameForUser(requester), RequesterEmail: a.emailForUser(requester), Title: in.Title, Type: in.Type, Source: in.Source, ExternalID: ref, SourceURL: sourceURL, Status: "pending", CreatedAt: now, UpdatedAt: now}
 	a.mu.Lock()
 	if len(a.wishes) >= 5000 {
 		a.mu.Unlock()
@@ -466,15 +468,74 @@ func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
 	default:
 		log.Printf("vloader: email notification queue is full; request %s was saved without an email", wish.ID)
 	}
+	wish.RequesterEmail = ""
 	jsonOut(w, wish)
 }
 
 func (a *App) notificationWorker() {
 	for wish := range a.notifications {
+		if wish.Status == "available" {
+			err := sendWishAvailableNotification(a.config(), a.origin, wish)
+			if err != nil {
+				log.Printf("vloader: could not email requester about available request %s: %s", wish.ID, redactRequesterEmail(err.Error(), wish.RequesterEmail))
+			}
+			a.finishAvailabilityNotice(wish.ID, err == nil)
+			continue
+		}
 		if err := sendWishNotification(a.config(), a.origin, wish); err != nil {
 			log.Printf("vloader: could not email admin about request %s: %v", wish.ID, err)
 		}
 	}
+}
+
+func redactRequesterEmail(message, email string) string {
+	if email == "" {
+		return message
+	}
+	return strings.ReplaceAll(message, email, "[email redacted]")
+}
+
+func (a *App) enqueueAvailabilityNotice(wish Wish) {
+	select {
+	case a.notifications <- wish:
+	default:
+		a.mu.Lock()
+		delete(a.availabilityEmailQueued, wish.ID)
+		a.mu.Unlock()
+		log.Printf("vloader: email notification queue is full; availability notice for request %s was not queued", wish.ID)
+	}
+}
+
+func (a *App) finishAvailabilityNotice(id string, sent bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.availabilityEmailQueued, id)
+	if !sent {
+		return
+	}
+	for i := range a.wishes {
+		if a.wishes[i].ID != id || a.wishes[i].AvailabilityEmailSent {
+			continue
+		}
+		a.wishes[i].AvailabilityEmailSent = true
+		if err := a.persistWishesLocked(); err != nil {
+			a.wishes[i].AvailabilityEmailSent = false
+			log.Printf("vloader: could not save availability email status for request %s: %v", id, err)
+		}
+		return
+	}
+}
+
+func sendWishAvailableNotification(cfg Config, appURL string, wish Wish) error {
+	if !validEmail(wish.RequesterEmail) {
+		return fmt.Errorf("request has no verified requester email address")
+	}
+	if cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" || (cfg.SMTPUsername != "" && cfg.SMTPPassword == "") {
+		return fmt.Errorf("SMTP notification settings are incomplete")
+	}
+	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Title)
+	body := fmt.Sprintf("Your requested title is now available in Emby.\r\n\r\nTitle: %s\r\nType: %s\r\n\r\nOpen your vloader library: %s\r\n", title, wish.Type, strings.TrimRight(appURL, "/")+"/")
+	return sendSMTPMessage(cfg, wish.RequesterEmail, "[vloader] Now available: "+title, body)
 }
 
 func sendWishNotification(cfg Config, appURL string, wish Wish) error {
@@ -670,24 +731,28 @@ func wishMatches(wish Wish, item Item) bool {
 
 // resolveWishesLocked checks newly synchronized Emby items and marks matched wishes available.
 // The caller must hold a.mu for writing.
-func (a *App) resolveWishesLocked(catalog Catalog) bool {
+func (a *App) resolveWishesLocked(catalog Catalog) ([]Wish, bool) {
+	var notices []Wish
 	changed := false
 	for i := range a.wishes {
 		wish := &a.wishes[i]
-		if wish.Status != "pending" && wish.Status != "approved" {
-			continue
-		}
-		for _, item := range catalog.Items {
-			if wishMatches(*wish, item) {
-				wish.Status = "available"
-				wish.ItemID = item.ID
-				wish.UpdatedAt = catalog.Updated.UTC()
-				changed = true
-				break
+		if wish.Status == "pending" || wish.Status == "approved" {
+			for _, item := range catalog.Items {
+				if wishMatches(*wish, item) {
+					wish.Status = "available"
+					wish.ItemID = item.ID
+					wish.UpdatedAt = catalog.Updated.UTC()
+					changed = true
+					break
+				}
 			}
 		}
+		if wish.Status == "available" && !wish.AvailabilityEmailSent && validEmail(wish.RequesterEmail) && !a.availabilityEmailQueued[wish.ID] {
+			a.availabilityEmailQueued[wish.ID] = true
+			notices = append(notices, *wish)
+		}
 	}
-	return changed
+	return notices, changed
 }
 
 func (a *App) persistWishesLocked() error {
