@@ -139,7 +139,7 @@ func TestNotificationSettingsAreAdminOnlyAndPersistWithoutLeakingSecret(t *testi
 	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
 	sessionRoles.Store("user-session", "user")
 	t.Cleanup(func() { sessionRoles.Delete("user-session") })
-	body := `{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPUsername":"mailer","SMTPPassword":"mail-secret","SMTPFrom":"vloader@example.com"}`
+	body := `{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPUsername":"mailer","SMTPPassword":"mail-secret","SMTPFrom":"vloader@example.com","SMTPDisableTLS":true}`
 	if w := request(a, "POST", "/api/settings/notifications", body, a.origin, "user-session"); w.Code != http.StatusForbidden {
 		t.Fatalf("non-admin could change email settings: %d %s", w.Code, w.Body.String())
 	}
@@ -147,11 +147,11 @@ func TestNotificationSettingsAreAdminOnlyAndPersistWithoutLeakingSecret(t *testi
 		t.Fatalf("admin save failed: %d %s", w.Code, w.Body.String())
 	}
 	w := request(a, "GET", "/api/settings", "", "", "admin-session")
-	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "mail-secret") || !strings.Contains(w.Body.String(), `"HasSMTPPassword":true`) || !strings.Contains(w.Body.String(), `"OIDCCallbackURL":"http://localhost:8090/auth/callback"`) {
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "mail-secret") || !strings.Contains(w.Body.String(), `"HasSMTPPassword":true`) || !strings.Contains(w.Body.String(), `"SMTPDisableTLS":true`) || !strings.Contains(w.Body.String(), `"OIDCCallbackURL":"http://localhost:8090/auth/callback"`) {
 		t.Fatalf("settings response leaked or omitted secret indicator: %d %s", w.Code, w.Body.String())
 	}
 	b, err := os.ReadFile(filepath.Join(a.data, "settings.json"))
-	if err != nil || !strings.Contains(string(b), `"SMTPPassword":"mail-secret"`) {
+	if err != nil || !strings.Contains(string(b), `"SMTPPassword":"mail-secret"`) || !strings.Contains(string(b), `"SMTPDisableTLS":true`) {
 		t.Fatalf("notification settings were not persisted: %v %s", err, b)
 	}
 }
@@ -317,6 +317,20 @@ func TestSettingsRedactionAndServerChange(t *testing.T) {
 		t.Fatal("stale catalog exposed")
 	}
 }
+
+func TestAuthenticationSettingsSaveDoesNotValidateEmbyConnectionForm(t *testing.T) {
+	a := testApp(t)
+	a.cfg = Config{EmbyURL: "https://emby.example.test", APIKey: "server-key", SourceMode: "mount", SourcePrefix: "/media/movies", SyncIntervalMinutes: 360}
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	w := request(a, http.MethodPost, "/api/settings", `{"UpdateOIDC":true}`, a.origin, "admin-session")
+	if w.Code != http.StatusOK {
+		t.Fatalf("authentication-only save was rejected by unrelated connection validation: %d %s", w.Code, w.Body.String())
+	}
+	if a.cfg.EmbyURL != "https://emby.example.test" || a.cfg.APIKey != "server-key" || a.cfg.SourceMode != "mount" || a.cfg.SourcePrefix != "/media/movies" || a.cfg.SyncIntervalMinutes != 360 {
+		t.Fatalf("authentication save changed Emby settings: %+v", a.cfg)
+	}
+}
+
 func TestOIDCDisabledAndInvalidState(t *testing.T) {
 	a := testApp(t)
 	for _, p := range []string{"/auth/oidc", "/auth/callback?state=invalid"} {

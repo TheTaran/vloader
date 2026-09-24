@@ -29,3 +29,6 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 @media(max-width:560px){.settings-tabs{gap:0;margin-top:-4px}.settings-tab{padding:12px 13px;font-size:12px}}
 .oidc-callback-note code{display:inline-block;margin-top:7px;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 #email-test{margin-top:10px}
+
+.settings-card label.toggle{display:flex;align-items:center;gap:10px}.settings-card label.toggle input{display:inline-block;width:auto;margin:0;padding:0}
+.note.warning{border-color:#dca54b;color:#ffd18a}

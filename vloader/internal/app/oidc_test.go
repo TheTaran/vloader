@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,19 +29,28 @@ func TestOIDCFlowValidation(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, subject, nonce, audience string
+		groups                         []string
+		allowedGroups, adminGroups     string
+		role                           string
 		expired, missingCookie         bool
 		status                         int
 	}{
-		{"allowed", "allowed-sub", "nonce", "client", false, false, 303},
-		{"denied subject", "other-sub", "nonce", "client", false, false, 403},
-		{"nonce mismatch", "allowed-sub", "wrong", "client", false, false, 401},
-		{"audience mismatch", "allowed-sub", "nonce", "other-client", false, false, 401},
-		{"expired token", "allowed-sub", "nonce", "client", true, false, 401},
-		{"browser state binding", "allowed-sub", "nonce", "client", false, true, 403},
+		{name: "allowed subject", subject: "allowed-sub", nonce: "nonce", audience: "client", status: 303},
+		{name: "denied subject", subject: "other-sub", nonce: "nonce", audience: "client", status: 403},
+		{name: "allowed Pocket ID group", subject: "group-user", nonce: "nonce", audience: "client", groups: []string{"vloader-users"}, allowedGroups: "vloader-users", role: "user", status: 303},
+		{name: "denied group", subject: "other-user", nonce: "nonce", audience: "client", groups: []string{"other-group"}, allowedGroups: "vloader-users", status: 403},
+		{name: "admin Pocket ID group", subject: "admin-user", nonce: "nonce", audience: "client", groups: []string{"vloader-admins"}, adminGroups: "vloader-admins", role: "admin", status: 303},
+		{name: "nonce mismatch", subject: "allowed-sub", nonce: "wrong", audience: "client", status: 401},
+		{name: "audience mismatch", subject: "allowed-sub", nonce: "nonce", audience: "other-client", status: 401},
+		{name: "expired token", subject: "allowed-sub", nonce: "nonce", audience: "client", expired: true, status: 401},
+		{name: "browser state binding", subject: "allowed-sub", nonce: "nonce", audience: "client", missingCookie: true, status: 403},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := testApp(t)
 			a.cfg.OIDCAllowedSubjects = "allowed-sub"
+			a.cfg.OIDCGroupsClaim = "groups"
+			a.cfg.OIDCAllowedGroups = tc.allowedGroups
+			a.cfg.OIDCAdminGroups = tc.adminGroups
 			var issuer string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
@@ -57,7 +67,7 @@ func TestOIDCFlowValidation(t *testing.T) {
 					if tc.expired {
 						exp = time.Now().Add(-time.Hour)
 					}
-					token, e := jwt.Signed(signer).Claims(map[string]any{"iss": issuer, "sub": tc.subject, "aud": tc.audience, "exp": exp.Unix(), "iat": time.Now().Add(-2 * time.Hour).Unix(), "nonce": tc.nonce}).Serialize()
+					token, e := jwt.Signed(signer).Claims(map[string]any{"iss": issuer, "sub": tc.subject, "aud": tc.audience, "exp": exp.Unix(), "iat": time.Now().Add(-2 * time.Hour).Unix(), "nonce": tc.nonce, "groups": tc.groups}).Serialize()
 					if e != nil {
 						t.Error(e)
 					}
@@ -84,6 +94,13 @@ func TestOIDCFlowValidation(t *testing.T) {
 				if len(w.Result().Cookies()) == 0 {
 					t.Fatal("no session")
 				}
+				if tc.role != "" {
+					login := httptest.NewRequest("GET", "/", nil)
+					login.AddCookie(w.Result().Cookies()[0])
+					if got := a.role(login); got != tc.role {
+						t.Fatalf("role = %q, want %q", got, tc.role)
+					}
+				}
 				again := httptest.NewRecorder()
 				a.Handler().ServeHTTP(again, r)
 				if again.Code != 403 {
@@ -96,7 +113,7 @@ func TestOIDCFlowValidation(t *testing.T) {
 
 func TestOIDCStartUsesPKCEAndNonce(t *testing.T) {
 	a := testApp(t)
-	a.oauth = &oauth2.Config{ClientID: "client", Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize"}, RedirectURL: a.origin + "/auth/callback", Scopes: []string{"openid"}}
+	a.oauth = &oauth2.Config{ClientID: "client", Endpoint: oauth2.Endpoint{AuthURL: "https://id.example/authorize"}, RedirectURL: a.origin + "/auth/callback", Scopes: []string{"openid", "groups"}}
 	w := request(a, "GET", "/auth/oidc", "", "", "")
 	if w.Code != 302 {
 		t.Fatal(w.Code)
@@ -106,7 +123,7 @@ func TestOIDCStartUsesPKCEAndNonce(t *testing.T) {
 		t.Fatal(e)
 	}
 	q := u.Query()
-	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("nonce") == "" || q.Get("state") == "" {
+	if q.Get("code_challenge_method") != "S256" || q.Get("code_challenge") == "" || q.Get("nonce") == "" || q.Get("state") == "" || !strings.Contains(q.Get("scope"), "groups") {
 		t.Fatal("OIDC safeguards missing")
 	}
 	if len(w.Result().Cookies()) != 1 || w.Result().Cookies()[0].Value != q.Get("state") {

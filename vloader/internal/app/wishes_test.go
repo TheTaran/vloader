@@ -1,11 +1,105 @@
 package app
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	type serverResult struct {
+		message string
+		err     error
+	}
+	result := make(chan serverResult, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			result <- serverResult{err: err}
+			return
+		}
+		defer conn.Close()
+		reader := bufio.NewReader(conn)
+		send := func(line string) error { _, err := fmt.Fprint(conn, line+"\r\n"); return err }
+		if err := send("220 test SMTP ready"); err != nil {
+			result <- serverResult{err: err}
+			return
+		}
+		var message strings.Builder
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				result <- serverResult{err: err}
+				return
+			}
+			command := strings.TrimSpace(line)
+			switch {
+			case strings.HasPrefix(command, "EHLO "):
+				if err := send("250-test"); err != nil {
+					result <- serverResult{err: err}
+					return
+				}
+				if err := send("250 SIZE 100000"); err != nil {
+					result <- serverResult{err: err}
+					return
+				}
+			case strings.HasPrefix(command, "MAIL FROM:") || strings.HasPrefix(command, "RCPT TO:"):
+				if err := send("250 accepted"); err != nil {
+					result <- serverResult{err: err}
+					return
+				}
+			case command == "DATA":
+				if err := send("354 continue"); err != nil {
+					result <- serverResult{err: err}
+					return
+				}
+				for {
+					dataLine, err := reader.ReadString('\n')
+					if err != nil {
+						result <- serverResult{err: err}
+						return
+					}
+					if dataLine == ".\r\n" {
+						break
+					}
+					message.WriteString(dataLine)
+				}
+				if err := send("250 queued"); err != nil {
+					result <- serverResult{err: err}
+					return
+				}
+			case command == "QUIT":
+				_ = send("221 bye")
+				result <- serverResult{message: message.String()}
+				return
+			default:
+				_ = send("500 unexpected command")
+				result <- serverResult{err: fmt.Errorf("unexpected SMTP command: %s", command)}
+				return
+			}
+		}
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	cfg := Config{SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com", SMTPDisableTLS: true}
+	if err := sendSMTPMessage(cfg, "admin@example.com", "test", "plain transport test\r\n"); err != nil {
+		t.Fatalf("plain SMTP send failed: %v", err)
+	}
+	got := <-result
+	if got.err != nil || !strings.Contains(got.message, "plain transport test") {
+		t.Fatalf("plain SMTP server result = %#v", got)
+	}
+}
 
 func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	a := testApp(t)

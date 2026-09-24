@@ -127,14 +127,20 @@ func sendSMTPMessage(cfg Config, recipient, subject, body string) error {
 		return err
 	}
 	defer c.Quit()
-	if ok, _ := c.Extension("STARTTLS"); !ok {
-		return fmt.Errorf("SMTP server does not support STARTTLS")
-	}
-	if err = c.StartTLS(&tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
-		return err
+	if !cfg.SMTPDisableTLS {
+		if ok, _ := c.Extension("STARTTLS"); !ok {
+			return fmt.Errorf("SMTP server does not support STARTTLS")
+		}
+		if err = c.StartTLS(&tls.Config{ServerName: cfg.SMTPHost, MinVersion: tls.VersionTLS12}); err != nil {
+			return err
+		}
 	}
 	if cfg.SMTPUsername != "" {
-		if err = c.Auth(smtp.PlainAuth("", cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPHost)); err != nil {
+		var auth smtp.Auth = smtp.PlainAuth("", cfg.SMTPUsername, cfg.SMTPPassword, cfg.SMTPHost)
+		if cfg.SMTPDisableTLS {
+			auth = plainSMTPAuth{username: cfg.SMTPUsername, password: cfg.SMTPPassword}
+		}
+		if err = c.Auth(auth); err != nil {
 			return err
 		}
 	}
@@ -155,6 +161,16 @@ func sendSMTPMessage(cfg Config, recipient, subject, body string) error {
 	}
 	return w.Close()
 }
+
+// plainSMTPAuth is only selected after an administrator explicitly disables TLS.
+// SMTP AUTH PLAIN is then sent unencrypted and must be clearly disclosed in the UI.
+type plainSMTPAuth struct{ username, password string }
+
+func (a plainSMTPAuth) Start(*smtp.ServerInfo) (string, []byte, error) {
+	return "PLAIN", []byte("\x00" + a.username + "\x00" + a.password), nil
+}
+
+func (plainSMTPAuth) Next([]byte, bool) ([]byte, error) { return nil, nil }
 
 func (a *App) updateWish(w http.ResponseWriter, r *http.Request) {
 	var in struct {

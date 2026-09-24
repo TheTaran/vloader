@@ -41,12 +41,16 @@ type Config struct {
 	OIDCClientSecret    string
 	OIDCAllowedSubjects string
 	OIDCAdminSubjects   string
+	OIDCGroupsClaim     string
+	OIDCAllowedGroups   string
+	OIDCAdminGroups     string
 	UpdateOIDC          bool
 	SyncEnabled         bool
 	SyncIntervalMinutes int
 	AdminEmail          string
 	SMTPHost            string
 	SMTPPort            int
+	SMTPDisableTLS      bool
 	SMTPUsername        string
 	SMTPPassword        string
 	SMTPFrom            string
@@ -189,7 +193,7 @@ func New() (*App, error) {
 	if e = os.MkdirAll(a.data, 0700); e != nil {
 		return nil, e
 	}
-	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS"), OIDCAdminSubjects: os.Getenv("OIDC_ADMIN_SUBJECTS")}
+	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS"), OIDCAdminSubjects: os.Getenv("OIDC_ADMIN_SUBJECTS"), OIDCGroupsClaim: env("OIDC_GROUPS_CLAIM", "groups"), OIDCAllowedGroups: os.Getenv("OIDC_ALLOWED_GROUPS"), OIDCAdminGroups: os.Getenv("OIDC_ADMIN_GROUPS")}
 	if e := loadState(a.data+"/settings.json", &a.cfg); e != nil {
 		return nil, e
 	}
@@ -256,10 +260,14 @@ func (a *App) configureOIDC(c Config) error {
 			log.Print("vloader: OIDC provider discovery failed")
 			return errors.New("OIDC discovery failed")
 		}
-		if c.OIDCClientID == "" || c.OIDCAllowedSubjects == "" {
-			return errors.New("OIDC_CLIENT_ID and OIDC_ALLOWED_SUBJECTS required")
+		if c.OIDCClientID == "" || (c.OIDCAllowedSubjects == "" && c.OIDCAllowedGroups == "" && c.OIDCAdminGroups == "") {
+			return errors.New("OIDC_CLIENT_ID and at least one allowed subject or group required")
 		}
-		a.oauth = &oauth2.Config{ClientID: c.OIDCClientID, ClientSecret: c.OIDCClientSecret, Endpoint: provider.Endpoint(), RedirectURL: a.origin + "/auth/callback", Scopes: []string{oidc.ScopeOpenID, "profile"}}
+		scopes := []string{oidc.ScopeOpenID, "profile"}
+		if c.OIDCAllowedGroups != "" || c.OIDCAdminGroups != "" {
+			scopes = append(scopes, "groups")
+		}
+		a.oauth = &oauth2.Config{ClientID: c.OIDCClientID, ClientSecret: c.OIDCClientSecret, Endpoint: provider.Endpoint(), RedirectURL: a.origin + "/auth/callback", Scopes: scopes}
 		a.verifier = provider.Verifier(&oidc.Config{ClientID: a.oauth.ClientID})
 	} else {
 		a.oauth, a.verifier = nil, nil
@@ -541,6 +549,40 @@ func (a *App) oidcStart(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{Name: "oidc_state", Value: state, Path: "/auth", MaxAge: 300, HttpOnly: true, Secure: strings.HasPrefix(a.origin, "https:"), SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, a.oauth.AuthCodeURL(state, oidc.Nonce(nonce), oauth2.S256ChallengeOption(v)), 302)
 }
+
+func oidcClaimValues(raw json.RawMessage) []string {
+	var values []string
+	if len(raw) == 0 {
+		return values
+	}
+	if err := json.Unmarshal(raw, &values); err == nil {
+		return values
+	}
+	var single string
+	if err := json.Unmarshal(raw, &single); err == nil && single != "" {
+		return []string{single}
+	}
+	return values
+}
+
+func hasExactCSVValue(csv, value string) bool {
+	for _, candidate := range strings.Split(csv, ",") {
+		if candidate = strings.TrimSpace(candidate); candidate != "" && candidate == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnyCSVValue(csv string, values []string) bool {
+	for _, value := range values {
+		if hasExactCSVValue(csv, value) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if a.oauth == nil {
 		fail(w, 404, "OIDC not configured")
@@ -580,21 +622,28 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 		fail(w, 401, "Invalid ID token")
 		return
 	}
-	allowed := false
-	for _, sub := range strings.Split(a.config().OIDCAllowedSubjects, ",") {
-		if strings.TrimSpace(sub) == id.Subject {
-			allowed = true
-		}
+	cfg := a.config()
+	claimName := strings.TrimSpace(cfg.OIDCGroupsClaim)
+	if claimName == "" {
+		claimName = "groups"
 	}
+	var tokenClaims map[string]json.RawMessage
+	if e := id.Claims(&tokenClaims); e != nil {
+		log.Print("vloader: OIDC ID token claims could not be decoded")
+		fail(w, 401, "Invalid ID token")
+		return
+	}
+	groups := oidcClaimValues(tokenClaims[claimName])
+	allowed := hasExactCSVValue(cfg.OIDCAllowedSubjects, id.Subject) ||
+		hasAnyCSVValue(cfg.OIDCAllowedGroups, groups) ||
+		hasAnyCSVValue(cfg.OIDCAdminGroups, groups)
 	if !allowed {
 		fail(w, 403, "Account not authorized")
 		return
 	}
 	role := "user"
-	for _, sub := range strings.Split(a.config().OIDCAdminSubjects, ",") {
-		if strings.TrimSpace(sub) == id.Subject {
-			role = "admin"
-		}
+	if hasExactCSVValue(cfg.OIDCAdminSubjects, id.Subject) || hasAnyCSVValue(cfg.OIDCAdminGroups, groups) {
+		role = "admin"
 	}
 	a.issue(w, r, id.Subject, role)
 	http.Redirect(w, r, "/", 303)
@@ -602,17 +651,22 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c := a.config()
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != ""})
+	claim := c.OIDCGroupsClaim
+	if claim == "" {
+		claim = "groups"
+	}
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != ""})
 }
 
 func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		AdminEmail   string `json:"AdminEmail"`
-		SMTPHost     string `json:"SMTPHost"`
-		SMTPPort     int    `json:"SMTPPort"`
-		SMTPUsername string `json:"SMTPUsername"`
-		SMTPPassword string `json:"SMTPPassword"`
-		SMTPFrom     string `json:"SMTPFrom"`
+		AdminEmail     string `json:"AdminEmail"`
+		SMTPHost       string `json:"SMTPHost"`
+		SMTPPort       int    `json:"SMTPPort"`
+		SMTPDisableTLS bool   `json:"SMTPDisableTLS"`
+		SMTPUsername   string `json:"SMTPUsername"`
+		SMTPPassword   string `json:"SMTPPassword"`
+		SMTPFrom       string `json:"SMTPFrom"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -635,7 +689,7 @@ func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "Enter the SMTP password when SMTP authentication is enabled")
 		return
 	}
-	c.AdminEmail, c.SMTPHost, c.SMTPPort = in.AdminEmail, in.SMTPHost, in.SMTPPort
+	c.AdminEmail, c.SMTPHost, c.SMTPPort, c.SMTPDisableTLS = in.AdminEmail, in.SMTPHost, in.SMTPPort, in.SMTPDisableTLS
 	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = in.SMTPUsername, in.SMTPPassword, in.SMTPFrom
 	if err := persist(a.data+"/settings.json", c); err != nil {
 		fail(w, http.StatusInternalServerError, "Failed to save notification settings")
@@ -702,14 +756,21 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &c) {
 		return
 	}
-	u, e := url.Parse(c.EmbyURL)
-	if e != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") || (c.SourceMode != "emby" && c.SourceMode != "mount") || !strings.HasPrefix(c.SourcePrefix, "/") {
-		fail(w, 400, "Invalid URL, source path or transfer mode")
-		return
-	}
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 	old := a.config()
+	if c.UpdateOIDC {
+		// Authentication has its own form; do not make it depend on Emby/source
+		// values sent by the browser. Preserve those settings exactly as stored.
+		c.EmbyURL, c.APIKey, c.SourceMode, c.SourcePrefix = old.EmbyURL, old.APIKey, old.SourceMode, old.SourcePrefix
+		c.SyncEnabled, c.SyncIntervalMinutes = old.SyncEnabled, old.SyncIntervalMinutes
+	} else {
+		u, err := url.Parse(c.EmbyURL)
+		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "https" && u.Scheme != "http") || (c.SourceMode != "emby" && c.SourceMode != "mount") || !strings.HasPrefix(c.SourcePrefix, "/") {
+			fail(w, 400, "Invalid URL, source path or transfer mode")
+			return
+		}
+	}
 	if c.SyncIntervalMinutes == 0 {
 		c.SyncIntervalMinutes = old.SyncIntervalMinutes
 	}
@@ -722,27 +783,33 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if !c.UpdateOIDC {
 		c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCAllowedSubjects, c.OIDCAdminSubjects = old.OIDCIssuer, old.OIDCClientID, old.OIDCClientSecret, old.OIDCAllowedSubjects, old.OIDCAdminSubjects
+		c.OIDCGroupsClaim, c.OIDCAllowedGroups, c.OIDCAdminGroups = old.OIDCGroupsClaim, old.OIDCAllowedGroups, old.OIDCAdminGroups
 	}
+	// Admin subject IDs remain environment-managed; the GUI edits group-based roles.
+	c.OIDCAdminSubjects = old.OIDCAdminSubjects
 	// Notifications are edited through their own admin-only form and must survive
 	// saves from the connection and authentication forms.
-	c.AdminEmail, c.SMTPHost, c.SMTPPort = old.AdminEmail, old.SMTPHost, old.SMTPPort
+	c.AdminEmail, c.SMTPHost, c.SMTPPort, c.SMTPDisableTLS = old.AdminEmail, old.SMTPHost, old.SMTPPort, old.SMTPDisableTLS
 	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = old.SMTPUsername, old.SMTPPassword, old.SMTPFrom
-	if c.APIKey == "" {
+	if !c.UpdateOIDC && c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
 			fail(w, 400, "Enter the API key again when switching servers")
 			return
 		}
 		c.APIKey = old.APIKey
 	}
-	if c.APIKey == "" {
+	if !c.UpdateOIDC && c.APIKey == "" {
 		fail(w, 400, "API key is required")
 		return
 	}
 	if c.OIDCClientSecret == "" {
 		c.OIDCClientSecret = old.OIDCClientSecret
 	}
-	if c.OIDCIssuer != "" && (c.OIDCClientID == "" || c.OIDCAllowedSubjects == "") {
-		fail(w, 400, "OIDC client ID and allowed subjects are required")
+	if c.OIDCGroupsClaim == "" {
+		c.OIDCGroupsClaim = "groups"
+	}
+	if c.OIDCIssuer != "" && (c.OIDCClientID == "" || (c.OIDCAllowedSubjects == "" && c.OIDCAllowedGroups == "" && c.OIDCAdminGroups == "")) {
+		fail(w, 400, "OIDC client ID and at least one allowed subject or group are required")
 		return
 	}
 	if !a.localAuth && c.OIDCIssuer == "" {

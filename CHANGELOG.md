@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## v0.1.11
+- Allow OIDC access and administrator roles by verified group claims, including Pocket ID `groups`.
+- Add group claim, allowed groups and administrator groups to Settings → Authentication.
+- Fix authentication settings saves so they preserve and do not revalidate unrelated Emby connection settings.
+- Add an admin-controlled SMTP TLS disable option for trusted plain-SMTP relays, with an explicit in-UI security warning.
 
 ## v0.1.10
 - Display the configured OIDC callback URL in Settings → Authentication.
