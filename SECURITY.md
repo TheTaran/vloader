@@ -16,7 +16,8 @@ The Emby API key is a server-side credential. The configured Emby server is an a
 - Server-side Emby API tokens; redirects rejected to prevent credential forwarding.
 - Read-only media roots and os.OpenRoot confinement, including symlink escapes.
 - Non-root container, dropped capabilities, read-only root filesystem, bounded logs and resources.
-- Atomic mode-0600 settings/catalog/request snapshots. Emby, OIDC and SMTP credentials remain plaintext on the protected persistent volume and in .env; protect host and backups. SMTP notifications use STARTTLS with certificate verification by default. Administrators can explicitly disable TLS for a trusted plain-SMTP relay; in that mode message content and SMTP credentials are transmitted unencrypted.
+- Atomic mode-0600 settings/catalog/request snapshots. Emby, OIDC and SMTP credentials may be seeded from `.env`; saved credentials and the TMDb API token remain plaintext in the protected persistent volume. Protect the host and backups. SMTP notifications use STARTTLS with certificate verification by default. Administrators can explicitly disable TLS for a trusted plain-SMTP relay; in that mode message content and SMTP credentials are transmitted unencrypted.
+- Request snapshots contain requester identifiers and, for OIDC users, display names. Protect `/data/wishes.json` and its backups as user data.
 
 ## Operational limits
 All sessions are invalidated on restart. Login attempts are globally limited to one per second; protect an Internet-facing instance additionally at the reverse proxy. The catalog is a mirror of configured server data and image bytes are fetched on demand, not an offline image archive. Downloads stream to the browser and do not create server-side download jobs. Emby API streaming requires an available server; mounted file downloads require the configured share. All title IDs are checked against the active catalog.

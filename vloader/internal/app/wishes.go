@@ -1,8 +1,11 @@
 package app
 
 import (
+	"context"
 	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -17,17 +20,186 @@ import (
 var imdbIDPattern = regexp.MustCompile(`^tt[0-9]{5,12}$`)
 var tmdbIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,11}$`)
 
+type WishMetadata struct {
+	Title       string   `json:"title"`
+	Overview    string   `json:"overview,omitempty"`
+	PosterURL   string   `json:"posterUrl,omitempty"`
+	ReleaseDate string   `json:"releaseDate,omitempty"`
+	Genres      []string `json:"genres,omitempty"`
+	Rating      float64  `json:"rating,omitempty"`
+	Runtime     int      `json:"runtime,omitempty"`
+}
+
+type wishMetadataCache struct {
+	Metadata WishMetadata
+	Expires  time.Time
+}
+
 func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
 	user, admin := a.user(r), a.role(r) == "admin"
 	a.mu.RLock()
 	defer a.mu.RUnlock()
+	displayNames := make(map[string]string, len(a.sessions))
+	for _, session := range a.sessions {
+		if session.User != "" && session.DisplayName != "" && time.Now().Before(session.Expiry) {
+			displayNames[session.User] = session.DisplayName
+		}
+	}
 	items := make([]Wish, 0, len(a.wishes))
 	for _, wish := range a.wishes {
 		if admin || wish.Requester == user {
+			if wish.RequesterName == "" {
+				wish.RequesterName = displayNames[wish.Requester]
+			}
 			items = append(items, wish)
 		}
 	}
-	jsonOut(w, map[string]any{"items": items, "admin": admin})
+	jsonOut(w, map[string]any{"items": items, "admin": admin, "metadataEnabled": a.cfg.TMDBAPIKey != ""})
+}
+
+func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {
+	user, admin := a.user(r), a.role(r) == "admin"
+	var wish Wish
+	a.mu.RLock()
+	found := false
+	for _, candidate := range a.wishes {
+		if candidate.ID == r.PathValue("id") && (admin || candidate.Requester == user) {
+			wish, found = candidate, true
+			break
+		}
+	}
+	a.mu.RUnlock()
+	if !found {
+		fail(w, http.StatusNotFound, "Request not found")
+		return
+	}
+	if wish.Source != "imdb" && wish.Source != "tmdb" {
+		fail(w, http.StatusNotFound, "No external title reference for this request")
+		return
+	}
+	cfg := a.config()
+	if cfg.TMDBAPIKey == "" {
+		fail(w, http.StatusFailedDependency, "Configure a TMDb API Read Access Token in Settings, Metadata to load title details")
+		return
+	}
+	a.mu.RLock()
+	cached, ok := a.wishMetadata[wish.ID]
+	a.mu.RUnlock()
+	if ok && time.Now().Before(cached.Expires) {
+		jsonOut(w, cached.Metadata)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	metadata, err := fetchWishMetadata(ctx, a.client, cfg.TMDBAPIKey, wish)
+	if err != nil {
+		log.Printf("vloader: TMDb metadata lookup failed for request %s: %v", wish.ID, err)
+		fail(w, http.StatusBadGateway, "Could not load external title details; verify the TMDb API Read Access Token")
+		return
+	}
+	a.mu.Lock()
+	a.wishMetadata[wish.ID] = wishMetadataCache{Metadata: metadata, Expires: time.Now().Add(6 * time.Hour)}
+	a.mu.Unlock()
+	jsonOut(w, metadata)
+}
+
+type tmdbSearchResult struct {
+	ID          int      `json:"id"`
+	Title       string   `json:"title"`
+	Name        string   `json:"name"`
+	Overview    string   `json:"overview"`
+	PosterPath  string   `json:"poster_path"`
+	ReleaseDate string   `json:"release_date"`
+	FirstAir    string   `json:"first_air_date"`
+	Rating      float64  `json:"vote_average"`
+	Genres      []string `json:"-"`
+}
+
+func fetchWishMetadata(ctx context.Context, baseClient *http.Client, apiKey string, wish Wish) (WishMetadata, error) {
+	client := *baseClient
+	client.Timeout = 8 * time.Second
+	requestJSON := func(endpoint string, target any) error {
+		u := url.URL{Scheme: "https", Host: "api.themoviedb.org", Path: "/3/" + strings.TrimLeft(endpoint, "/")}
+		q := u.Query()
+		if wish.Source == "imdb" && strings.HasPrefix(endpoint, "find/") {
+			q.Set("external_source", "imdb_id")
+		}
+		u.RawQuery = q.Encode()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		res, err := client.Do(req)
+		if err != nil {
+			return err
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			return fmt.Errorf("TMDb returned HTTP %d", res.StatusCode)
+		}
+		if err := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(target); err != nil {
+			return fmt.Errorf("invalid TMDb response")
+		}
+		return nil
+	}
+	var result tmdbSearchResult
+	if wish.Source == "imdb" {
+		var matches struct {
+			Movies []tmdbSearchResult `json:"movie_results"`
+			TV     []tmdbSearchResult `json:"tv_results"`
+		}
+		if err := requestJSON("find/"+url.PathEscape(wish.ExternalID), &matches); err != nil {
+			return WishMetadata{}, err
+		}
+		if wish.Type == "Movie" && len(matches.Movies) > 0 {
+			result = matches.Movies[0]
+		} else if wish.Type == "Series" && len(matches.TV) > 0 {
+			result = matches.TV[0]
+		} else {
+			return WishMetadata{}, fmt.Errorf("no matching %s title found", wish.Type)
+		}
+	} else {
+		kind := "movie"
+		if wish.Type == "Series" {
+			kind = "tv"
+		}
+		if err := requestJSON(kind+"/"+url.PathEscape(wish.ExternalID), &result); err != nil {
+			return WishMetadata{}, err
+		}
+	}
+
+	kind := "movie"
+	metadata := WishMetadata{Title: result.Title, Overview: result.Overview, ReleaseDate: result.ReleaseDate, Rating: result.Rating}
+	if wish.Type == "Series" {
+		kind, metadata.Title, metadata.ReleaseDate = "tv", result.Name, result.FirstAir
+	}
+	if result.PosterPath != "" && strings.HasPrefix(result.PosterPath, "/") && !strings.Contains(result.PosterPath, "..") {
+		metadata.PosterURL = "https://image.tmdb.org/t/p/w342" + result.PosterPath
+	}
+	if result.ID > 0 {
+		var details struct {
+			Genres []struct {
+				Name string `json:"name"`
+			} `json:"genres"`
+			Runtime        int   `json:"runtime"`
+			EpisodeRuntime []int `json:"episode_run_time"`
+		}
+		if err := requestJSON(fmt.Sprintf("%s/%d", kind, result.ID), &details); err == nil {
+			for _, genre := range details.Genres {
+				metadata.Genres = append(metadata.Genres, genre.Name)
+			}
+			metadata.Runtime = details.Runtime
+			if metadata.Runtime == 0 && len(details.EpisodeRuntime) > 0 {
+				metadata.Runtime = details.EpisodeRuntime[0]
+			}
+		}
+	}
+	if strings.TrimSpace(metadata.Title) == "" {
+		return WishMetadata{}, fmt.Errorf("external title has no display name")
+	}
+	return metadata, nil
 }
 
 func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
@@ -61,7 +233,8 @@ func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	wish := Wish{ID: random(), Requester: a.user(r), Title: in.Title, Type: in.Type, Source: in.Source, ExternalID: ref, SourceURL: sourceURL, Status: "pending", CreatedAt: now, UpdatedAt: now}
+	requester := a.user(r)
+	wish := Wish{ID: random(), Requester: requester, RequesterName: a.displayNameForUser(requester), Title: in.Title, Type: in.Type, Source: in.Source, ExternalID: ref, SourceURL: sourceURL, Status: "pending", CreatedAt: now, UpdatedAt: now}
 	a.mu.Lock()
 	if len(a.wishes) >= 5000 {
 		a.mu.Unlock()
@@ -104,7 +277,11 @@ func sendWishNotification(cfg Config, appURL string, wish Wish) error {
 		return nil
 	}
 	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Title)
-	requester := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Requester)
+	requester := wish.RequesterName
+	if requester == "" {
+		requester = wish.Requester
+	}
+	requester = strings.NewReplacer("\r", " ", "\n", " ").Replace(requester)
 	body := fmt.Sprintf("A new vloader request was submitted.\r\n\r\nTitle: %s\r\nType: %s\r\nRequested by: %s\r\nSource: %s %s\r\n\r\nReview requests: %s\r\n", title, wish.Type, requester, wish.Source, wish.ExternalID, strings.TrimRight(appURL, "/")+"/")
 	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] New "+wish.Type+" request", body)
 }

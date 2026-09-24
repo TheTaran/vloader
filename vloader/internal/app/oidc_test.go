@@ -134,3 +134,24 @@ func TestOIDCStartUsesPKCEAndNonce(t *testing.T) {
 		t.Fatal("missing flow")
 	}
 }
+
+func TestOIDCDisplayNamePrefersDisplayNameThenName(t *testing.T) {
+	for _, tc := range []struct {
+		name, claims, want string
+	}{
+		{name: "display_name", claims: `{"display_name":"Alex Display","name":"Alex Name"}`, want: "Alex Display"},
+		{name: "name fallback", claims: `{"name":"Alex Name"}`, want: "Alex Name"},
+		{name: "subject fallback", claims: `{}`, want: "stable-subject"},
+		{name: "blank display name", claims: `{"display_name":"  ","name":"Alex Name"}`, want: "Alex Name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var claims map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(tc.claims), &claims); err != nil {
+				t.Fatal(err)
+			}
+			if got := oidcDisplayName(claims, "stable-subject"); got != tc.want {
+				t.Fatalf("oidcDisplayName() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

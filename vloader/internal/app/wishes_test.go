@@ -4,8 +4,10 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -104,7 +106,7 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
-	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", DisplayName: "Viewer Name", Expiry: time.Now().Add(time.Hour)}
 	sessionRoles.Store("user-session", "user")
 	t.Cleanup(func() { sessionRoles.Delete("user-session") })
 
@@ -113,7 +115,7 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 		t.Fatalf("create wish: %d %s", created.Code, created.Body.String())
 	}
 	var wish Wish
-	if err := json.Unmarshal(created.Body.Bytes(), &wish); err != nil || wish.Requester != "viewer" || wish.Status != "pending" {
+	if err := json.Unmarshal(created.Body.Bytes(), &wish); err != nil || wish.Requester != "viewer" || wish.RequesterName != "Viewer Name" || wish.Status != "pending" {
 		t.Fatalf("invalid created wish: %+v err=%v", wish, err)
 	}
 	if len(a.notifications) != 1 {
@@ -130,6 +132,9 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 		if err := json.Unmarshal(listed.Body.Bytes(), &response); err != nil || len(response.Items) != tc.count {
 			t.Fatalf("list for %s: count=%d err=%v", tc.cookie, len(response.Items), err)
 		}
+		if tc.cookie == "admin-session" && response.Items[0].RequesterName != "Viewer Name" {
+			t.Fatalf("admin sees requester name %q, want display name", response.Items[0].RequesterName)
+		}
 	}
 	body := `{"status":"approved"}`
 	if updated := request(a, http.MethodPost, "/api/wishes/"+wish.ID, body, a.origin, "user-session"); updated.Code != http.StatusForbidden {
@@ -141,6 +146,55 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	duplicate := request(a, http.MethodPost, "/api/wishes", `{"title":"A New Film!","type":"Movie","source":"manual"}`, a.origin, "user-session")
 	if duplicate.Code != http.StatusConflict {
 		t.Fatalf("duplicate wish was accepted: %d %s", duplicate.Code, duplicate.Body.String())
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestFetchWishMetadataFromTMDB(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Query().Has("api_key") || r.Header.Get("Authorization") != "Bearer test-read-token" {
+			t.Fatalf("TMDb credential handling is wrong: url=%s auth=%q", r.URL, r.Header.Get("Authorization"))
+		}
+		var body string
+		switch path.Clean(r.URL.Path) {
+		case "/3/find/tt1234567":
+			body = `{"movie_results":[{"id":123,"title":"Example Movie","overview":"Synopsis","poster_path":"/poster.jpg","release_date":"2024-01-02","vote_average":7.5}]}`
+		case "/3/movie/123":
+			body = `{"genres":[{"name":"Drama"}],"runtime":98}`
+		default:
+			t.Fatalf("unexpected TMDb path: %s", r.URL.Path)
+		}
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	wish := Wish{Source: "imdb", ExternalID: "tt1234567", Type: "Movie"}
+	got, err := fetchWishMetadata(t.Context(), client, "test-read-token", wish)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "Example Movie" || got.PosterURL != "https://image.tmdb.org/t/p/w342/poster.jpg" || got.ReleaseDate != "2024-01-02" || got.Rating != 7.5 || got.Runtime != 98 || len(got.Genres) != 1 || got.Genres[0] != "Drama" {
+		t.Fatalf("unexpected TMDb metadata: %+v", got)
+	}
+}
+
+func TestSaveMetadataSettingsIsAdminOnlyAndSecretIsRedacted(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+	body := `{"TMDBAPIKey":"private-read-token"}`
+	if got := request(a, http.MethodPost, "/api/settings/metadata", body, a.origin, "user-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("regular user changed metadata settings: %d", got.Code)
+	}
+	if got := request(a, http.MethodPost, "/api/settings/metadata", body, a.origin, "admin-session"); got.Code != http.StatusOK {
+		t.Fatalf("admin could not save metadata settings: %d %s", got.Code, got.Body.String())
+	}
+	settings := request(a, http.MethodGet, "/api/settings", "", "", "admin-session")
+	if !strings.Contains(settings.Body.String(), `"HasTMDBAPIKey":true`) || strings.Contains(settings.Body.String(), "private-read-token") {
+		t.Fatal("metadata settings did not persist safely or exposed the API token")
 	}
 }
 

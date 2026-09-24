@@ -54,6 +54,7 @@ type Config struct {
 	SMTPUsername        string
 	SMTPPassword        string
 	SMTPFrom            string
+	TMDBAPIKey          string
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
@@ -113,21 +114,23 @@ type Catalog struct {
 	Updated   time.Time
 }
 type Wish struct {
-	ID         string    `json:"id"`
-	Requester  string    `json:"requester"`
-	Title      string    `json:"title"`
-	Type       string    `json:"type"`
-	Source     string    `json:"source"`
-	ExternalID string    `json:"externalId,omitempty"`
-	SourceURL  string    `json:"sourceUrl,omitempty"`
-	Status     string    `json:"status"`
-	ItemID     string    `json:"itemId,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
+	ID            string    `json:"id"`
+	Requester     string    `json:"requester"`
+	RequesterName string    `json:"requesterName,omitempty"`
+	Title         string    `json:"title"`
+	Type          string    `json:"type"`
+	Source        string    `json:"source"`
+	ExternalID    string    `json:"externalId,omitempty"`
+	SourceURL     string    `json:"sourceUrl,omitempty"`
+	Status        string    `json:"status"`
+	ItemID        string    `json:"itemId,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 type session struct {
-	User   string
-	Expiry time.Time
+	User        string
+	DisplayName string
+	Expiry      time.Time
 }
 
 var sessionRoles sync.Map
@@ -142,6 +145,7 @@ type App struct {
 	cfg           Config
 	catalog       Catalog
 	wishes        []Wish
+	wishMetadata  map[string]wishMetadataCache
 	notifications chan Wish
 	sessions      map[string]session
 	roles         map[string]string
@@ -182,7 +186,7 @@ func Run() {
 	log.Fatal(s.ListenAndServe())
 }
 func New() (*App, error) {
-	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, wishMetadata: map[string]wishMetadataCache{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
 	if !path.IsAbs(a.data) || a.data == "/" || a.data == a.mediaRoot || strings.HasPrefix(a.data, a.mediaRoot+"/") || strings.HasPrefix(a.mediaRoot, a.data+"/") {
 		return nil, errors.New("DATA_DIR must be an absolute path separate from the /media source mount")
 	}
@@ -358,10 +362,12 @@ func (a *App) Handler() http.Handler {
 	})))
 	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
 	m.Handle("POST /api/wishes", a.guard(http.HandlerFunc(a.createWish)))
+	m.Handle("GET /api/wishes/{id}/metadata", a.guard(http.HandlerFunc(a.getWishMetadata)))
 	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))
 	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
 	m.Handle("POST /api/settings/notifications", a.adminGuard(http.HandlerFunc(a.saveNotificationSettings)))
+	m.Handle("POST /api/settings/metadata", a.adminGuard(http.HandlerFunc(a.saveMetadataSettings)))
 	m.Handle("POST /api/settings/notifications/test", a.adminGuard(http.HandlerFunc(a.testNotificationSettings)))
 	m.Handle("POST /api/sync", a.adminGuard(http.HandlerFunc(a.syncCatalog)))
 	m.Handle("GET /api/images/{id}/{kind}", a.guard(http.HandlerFunc(a.image)))
@@ -430,6 +436,19 @@ func (a *App) user(r *http.Request) string {
 	}
 	return s.User
 }
+func (a *App) displayNameForUser(user string) string {
+	if user == "" {
+		return ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, s := range a.sessions {
+		if s.User == user && time.Now().Before(s.Expiry) && s.DisplayName != "" {
+			return s.DisplayName
+		}
+	}
+	return user
+}
 func (a *App) role(r *http.Request) string {
 	c, e := r.Cookie("vloader_session")
 	if e != nil {
@@ -470,9 +489,10 @@ func (a *App) adminGuard(h http.Handler) http.Handler {
 	})
 }
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
-	jsonOut(w, map[string]any{"user": a.user(r), "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth})
+	name := a.displayNameForUser(a.user(r))
+	jsonOut(w, map[string]any{"user": name, "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth})
 }
-func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role string) {
+func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role string, displayNames ...string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for k, s := range a.sessions {
@@ -488,7 +508,11 @@ func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role string) {
 		delete(a.sessions, c.Value)
 	}
 	key := random()
-	a.sessions[key] = session{User: user, Expiry: time.Now().Add(12 * time.Hour)}
+	displayName := user
+	if len(displayNames) > 0 && strings.TrimSpace(displayNames[0]) != "" {
+		displayName = strings.TrimSpace(displayNames[0])
+	}
+	a.sessions[key] = session{User: user, DisplayName: displayName, Expiry: time.Now().Add(12 * time.Hour)}
 	sessionRoles.Store(key, role)
 	http.SetCookie(w, &http.Cookie{Name: "vloader_session", Value: key, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(a.origin, "https:"), SameSite: http.SameSiteLaxMode, MaxAge: 43200})
 }
@@ -563,6 +587,16 @@ func oidcClaimValues(raw json.RawMessage) []string {
 		return []string{single}
 	}
 	return values
+}
+
+func oidcDisplayName(claims map[string]json.RawMessage, subject string) string {
+	for _, key := range []string{"display_name", "name"} {
+		var value string
+		if json.Unmarshal(claims[key], &value) == nil && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return subject
 }
 
 func hasExactCSVValue(csv, value string) bool {
@@ -645,7 +679,7 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	if hasExactCSVValue(cfg.OIDCAdminSubjects, id.Subject) || hasAnyCSVValue(cfg.OIDCAdminGroups, groups) {
 		role = "admin"
 	}
-	a.issue(w, r, id.Subject, role)
+	a.issue(w, r, id.Subject, role, oidcDisplayName(tokenClaims, id.Subject))
 	http.Redirect(w, r, "/", 303)
 }
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
@@ -655,7 +689,35 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if claim == "" {
 		claim = "groups"
 	}
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasTMDBAPIKey": c.TMDBAPIKey != ""})
+}
+
+func (a *App) saveMetadataSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		TMDBAPIKey string `json:"TMDBAPIKey"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.TMDBAPIKey = strings.TrimSpace(in.TMDBAPIKey)
+	if len(in.TMDBAPIKey) > 512 || strings.ContainsAny(in.TMDBAPIKey, "\r\n \t") {
+		fail(w, http.StatusBadRequest, "Enter a valid TMDb API Read Access Token")
+		return
+	}
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	c := a.config()
+	if in.TMDBAPIKey != "" {
+		c.TMDBAPIKey = in.TMDBAPIKey
+	}
+	if err := persist(a.data+"/settings.json", c); err != nil {
+		fail(w, http.StatusInternalServerError, "Failed to save metadata settings")
+		return
+	}
+	a.mu.Lock()
+	a.cfg = c
+	a.mu.Unlock()
+	jsonOut(w, map[string]bool{"ok": true})
 }
 
 func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
@@ -791,6 +853,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	// saves from the connection and authentication forms.
 	c.AdminEmail, c.SMTPHost, c.SMTPPort, c.SMTPDisableTLS = old.AdminEmail, old.SMTPHost, old.SMTPPort, old.SMTPDisableTLS
 	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = old.SMTPUsername, old.SMTPPassword, old.SMTPFrom
+	c.TMDBAPIKey = old.TMDBAPIKey
 	if !c.UpdateOIDC && c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
 			fail(w, 400, "Enter the API key again when switching servers")

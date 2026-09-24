@@ -1,10 +1,12 @@
 # vloader
 
-Users can request movies and series from **Requests** using a manual title, IMDb ID/URL, or TMDb ID/URL. Admins review incoming requests in the same page. Each Emby sync checks approved and pending requests against provider IDs or exact normalized titles; a match marks the request available and provides the individual download link to the requester. For a series, a season download starts a separate browser download for every episode.
+Users can request movies and series from **Requests** using a manual title, IMDb ID/URL, or TMDb ID/URL. Admins see all requests with the requester display name and can approve or decline them; regular users see their own requests and availability. Each Emby sync checks approved and pending requests against provider IDs or exact normalized titles. A match marks the request available and adds its download link.
+
+When an IMDb or TMDb reference is supplied, request cards fetch poster art, overview, release date, genres, rating and runtime from TMDb. Configure the TMDb API Read Access Token in **Settings → Metadata**. vloader stores it with the other admin settings in `/data/settings.json` and never returns it to the browser. Metadata is cached in memory for six hours. The TMDb logo and required attribution appear in the interface when this integration is enabled.
 
 Admins can configure an administrator email address and an SMTP server under **Settings → Email notifications**. Save the settings, then use **Send test email** to verify delivery to the configured admin address. vloader sends plain-text mail using SMTP with STARTTLS and certificate verification by default (normally port 587). An admin can disable TLS under **Settings → Email notifications** for a trusted relay that accepts plain SMTP; the chosen host/port must permit unencrypted delivery. SMTP settings and the password are stored in `/data/settings.json`; the password is never returned to the browser. If delivery fails, the request remains saved and the error is recorded in the application log. This sends new-request notifications only; user availability notices remain in the web interface.
 
-Eine schlanke Go-/Docker-WebGUI für deine Emby-Sammlung. Dunkles Kino-Design, lokale und OIDC-Anmeldung, gespiegelte Bibliotheken mit Metadaten und Bildern sowie Downloads direkt in den Browser.
+Eine schlanke Go-/Docker-WebGUI für deine Emby-Sammlung. Dunkles Kino-Design, lokale und OIDC-Anmeldung, gespiegelte Bibliotheken mit Metadaten und Bildern sowie Downloads direkt in den Browser. Die Titelkarten haben kompakte, einheitliche Download-Schaltflächen; die Schriftgröße bleibt dabei lesbar. Der Versionshinweis unten links prüft GitHub-Releases, markiert verfügbare Updates farblich und öffnet beim Anklicken die aktuelle GitHub-Version.
 
 ## Start
 
@@ -21,11 +23,13 @@ Für LAN-Zugriff BIND_ADDRESS und APP_URL passend setzen; für entfernten Zugrif
 
 ## Emby verbinden
 
-Unter **Verbindungen** Server-URL (optional mit `/emby`-Basispfad) und API-Schlüssel speichern. Den Schlüssel in Emby unter **Erweitert → API-Schlüssel** erstellen. Anschließend in **Sammlung → Synchronisieren** den Katalog übernehmen.
+Unter **Settings → Connection** Server-URL (optional mit `/emby`-Basispfad) und API-Schlüssel speichern. Den Schlüssel in Emby unter **Erweitert → API-Schlüssel** erstellen. Administratoren starten die Synchronisierung über **Sync** in der Emby-Serverbox links unten.
 
-Bibliotheks- und Titel-IDs, ursprüngliche Elternzuordnung, Beschreibung, Jahr, Genres, Bewertung, Laufzeit, Bildreferenzen und Medienquellen werden gespiegelt. Bilder lädt vloader authentisiert von Emby bei Bedarf; kein vollständiges Offline-Bildarchiv. Katalog und Einstellungen liegen persistent im Docker-Volume. Eine fehlgeschlagene Synchronisierung erhält den letzten vollständigen Katalog. Die Anwendung erstellt keine neuen Libraries auf einem zweiten Emby-Server.
+Bibliotheks- und Titel-IDs, ursprüngliche Elternzuordnung, Beschreibung, Jahr, Genres, Bewertung, Laufzeit, Bildreferenzen und Medienquellen werden gespiegelt. Die Detailansicht zeigt Emby-Angaben zu Videoqualität und Audiospuren, sofern der Server sie liefert. Bilder lädt vloader authentisiert von Emby bei Bedarf; kein vollständiges Offline-Bildarchiv. Katalog, Einstellungen und Benutzeranfragen liegen persistent im Docker-Volume. Eine fehlgeschlagene Synchronisierung erhält den letzten vollständigen Katalog. Die Anwendung erstellt keine neuen Libraries auf einem zweiten Emby-Server.
 
-Titel anklicken → Details → **Datei herunterladen**. Filme und Episoden sind einzeln herunterladbar; Serien-/Ordnerobjekte nicht. Downloads gehen in den Browser, nicht in eine serverseitige Warteschlange. Emby-Downloads erfordern einen erreichbaren Server und passende API-Berechtigung. Große Dateien werden gestreamt, nicht in den RAM geladen.
+Titel anklicken, um Details zu öffnen. Filme und einzelne Episoden können über die grünen **Download**-Schaltflächen geladen werden. In einer Serie kann eine ganze Staffel geladen werden; vloader startet dafür für jede Folge einen separaten Browser-Download. Die Download-Schaltflächen haben überall dieselbe kompakte Größe. Downloads gehen in den Browser, nicht in eine serverseitige Warteschlange. Emby-Downloads erfordern einen erreichbaren Server und passende API-Berechtigung. Große Dateien werden gestreamt, nicht in den RAM geladen.
+
+Settings und Synchronisierung stehen nur Administratoren zur Verfügung. Lokale Benutzer `admin` hat Adminrechte; OIDC-Administratoren werden über `OIDC_ADMIN_SUBJECTS` oder `OIDC_ADMIN_GROUPS` festgelegt. Bei OIDC wird `display_name`, danach `name` als Anzeigename genutzt; Berechtigungen beruhen weiterhin auf dem stabilen `sub`-Claim und den verifizierten Gruppen.
 
 ## NFS und SMB im Hauptimage
 
@@ -35,7 +39,7 @@ Alle Varianten stehen kommentiert in **compose-template.yml**. Die tatsächlich 
 
 ### Freigabe aktivieren
 
-1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen. Den `/data`-Bind-Mount beibehalten; `settings.json` und `catalog.json` werden direkt in diesem Verzeichnis gespeichert. Für den Standardpfad zuerst `mkdir -p ./data && sudo chown 10001:10001 ./data && sudo chmod 700 ./data` ausführen.
+1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen. Den `/data`-Bind-Mount beibehalten; `settings.json`, `catalog.json` und `wishes.json` werden direkt in diesem Verzeichnis gespeichert. Für den Standardpfad zuerst `mkdir -p ./data && sudo chown 10001:10001 ./data && sudo chmod 700 ./data` ausführen.
    Bestehende Installationen, die bisher `./.vloader` verwendet haben, müssen `settings.json` und `catalog.json` einmalig nach `./data` verschieben und dem Verzeichnis UID/GID `10001:10001` zuweisen.
 2. Die gemeinsamen Mount-Einstellungen aus der Vorlage übernehmen: Startbenutzer `0:0`, `SYS_ADMIN`, `SETUID`, `SETGID` und das dort angegebene `security_opt`.
 3. Genau eine `environment`-Variante übernehmen: `SOURCE_MOUNT: nfs` oder `SOURCE_MOUNT: smb`.
@@ -78,8 +82,8 @@ Für Pocket ID den Gruppen-Claim dem vloader-OIDC-Client zuweisen und sicherstel
 
 - `compose.yml`: lokale Entwicklung, non-root und Read-only-Härtung.
 - `compose-template.yml`: Standardvorlage einschließlich NFS-/SMB-Konfiguration.
-- `.env.example`: kommentierte Variablen; `.enx.example`: zusätzlich der angefragte Dateiname.
-- `Security.md`, `SECURITY.md`: Sicherheitshinweise und Meldeverfahren.
+- `.env.example`: kommentierte Variablen.
+- `SECURITY.md`: Sicherheitshinweise und Meldeverfahren.
 - `vloader/docs/`: Architektur und Teststrategie.
 
 Gespeicherte GUI-Einstellungen überschreiben Emby-/Quellen-Startwerte aus `.env`; Änderungen danach über die GUI vornehmen. Lokale Anmeldung wird über `LOCAL_AUTH_ENABLED=true|false` in Compose gesteuert. Bei `false` muss eine vollständige OIDC-Konfiguration vorhanden sein. Ein Serverwechsel verlangt die erneute Eingabe eines API-Schlüssels und eine neue Synchronisierung.

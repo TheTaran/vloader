@@ -101,7 +101,7 @@ func TestLoginDenialAndExpiry(t *testing.T) {
 	if w.Code != 429 {
 		t.Fatal(w.Code)
 	}
-	a.sessions["expired"] = session{"admin", time.Now().Add(-time.Second)}
+	a.sessions["expired"] = session{User: "admin", Expiry: time.Now().Add(-time.Second)}
 	if w := request(a, "GET", "/api/catalog", "", "", "expired"); w.Code != 401 {
 		t.Fatal(w.Code)
 	}
@@ -209,7 +209,7 @@ func TestMountDownloadAndSymlinkEscape(t *testing.T) {
 	a.cfg.SourceMode = "mount"
 	a.cfg.SourcePrefix = "/source"
 	a.catalog = Catalog{SourceURL: a.cfg.EmbyURL, Items: []Item{{ID: "1", Path: "/source/movie.mkv"}, {ID: "2", Path: "/source/escape.mkv"}, {ID: "3", Path: "/etc/passwd"}}}
-	a.sessions["key"] = session{"admin", time.Now().Add(time.Hour)}
+	a.sessions["key"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	w := request(a, "GET", "/api/download/1", "", "", "key")
 	if w.Code != 200 || w.Body.String() != "movie-data" || !strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") {
 		t.Fatal(w.Code, w.Body.String())
@@ -257,7 +257,7 @@ func TestEmbySyncPaginationAtomicityAndDownloads(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg = Config{EmbyURL: server.URL, APIKey: "test-key", SourceMode: "emby"}
-	a.sessions["key"] = session{"admin", time.Now().Add(time.Hour)}
+	a.sessions["key"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	w := request(a, "POST", "/api/sync", "{}", a.origin, "key")
 	if w.Code != 200 {
 		t.Fatal(w.Code, w.Body.String())
@@ -296,7 +296,7 @@ func TestSettingsRedactionAndServerChange(t *testing.T) {
 	a.cfg.APIKey = "top-secret"
 	a.cfg.EmbyURL = "http://old.invalid"
 	a.catalog = Catalog{SourceURL: a.cfg.EmbyURL, Items: []Item{{ID: "old"}}}
-	a.sessions["key"] = session{"admin", time.Now().Add(time.Hour)}
+	a.sessions["key"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	w := request(a, "GET", "/api/settings", "", "", "key")
 	if strings.Contains(w.Body.String(), "top-secret") {
 		t.Fatal("secret disclosed")

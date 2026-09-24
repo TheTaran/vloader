@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.1.12
+- Enrich IMDb/TMDb requests with cached TMDb posters and title details using an admin-configured API token; bundle and credit the TMDb logo locally.
+- Show OIDC `display_name` or `name` in the header and admin request list while keeping authorization tied to stable subjects.
+- Add an individual Download button for every episode and use a consistent compact size for all download buttons.
+- Link the sidebar version label to GitHub's latest release and mark available updates.
+- Refine poster and request-list layouts, including a smaller poster display and the admin-first request list.
+
 ## v0.1.11
 - Allow OIDC access and administrator roles by verified group claims, including Pocket ID `groups`.
 - Add group claim, allowed groups and administrator groups to Settings → Authentication.
