@@ -103,6 +103,18 @@ func sendWishNotification(cfg Config, appURL string, wish Wish) error {
 	if cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" {
 		return nil
 	}
+	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Title)
+	requester := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Requester)
+	body := fmt.Sprintf("A new vloader request was submitted.\r\n\r\nTitle: %s\r\nType: %s\r\nRequested by: %s\r\nSource: %s %s\r\n\r\nReview requests: %s\r\n", title, wish.Type, requester, wish.Source, wish.ExternalID, strings.TrimRight(appURL, "/")+"/")
+	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] New "+wish.Type+" request", body)
+}
+
+func sendTestEmail(cfg Config) error {
+	body := "This is a test email from vloader.\r\n\r\nYour SMTP settings are working.\r\n"
+	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] SMTP test", body)
+}
+
+func sendSMTPMessage(cfg Config, recipient, subject, body string) error {
 	host := net.JoinHostPort(cfg.SMTPHost, fmt.Sprint(cfg.SMTPPort))
 	conn, err := net.DialTimeout("tcp", host, 8*time.Second)
 	if err != nil {
@@ -129,17 +141,14 @@ func sendWishNotification(cfg Config, appURL string, wish Wish) error {
 	if err = c.Mail(cfg.SMTPFrom); err != nil {
 		return err
 	}
-	if err = c.Rcpt(cfg.AdminEmail); err != nil {
+	if err = c.Rcpt(recipient); err != nil {
 		return err
 	}
 	w, err := c.Data()
 	if err != nil {
 		return err
 	}
-	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Title)
-	requester := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Requester)
-	body := fmt.Sprintf("A new vloader request was submitted.\r\n\r\nTitle: %s\r\nType: %s\r\nRequested by: %s\r\nSource: %s %s\r\n\r\nReview requests: %s\r\n", title, wish.Type, requester, wish.Source, wish.ExternalID, strings.TrimRight(appURL, "/")+"/")
-	_, err = fmt.Fprintf(w, "From: %s\r\nTo: %s\r\nSubject: [vloader] New %s request\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s", cfg.SMTPFrom, cfg.AdminEmail, wish.Type, body)
+	_, err = fmt.Fprintf(w, "From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\n\r\n%s", cfg.SMTPFrom, recipient, subject, body)
 	if err != nil {
 		_ = w.Close()
 		return err

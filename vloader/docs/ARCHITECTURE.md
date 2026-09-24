@@ -3,8 +3,8 @@
 - cmd/vloader: process entrypoint.
 - internal/app: HTTP routing, local/OIDC authentication, settings, Emby synchronization and download transport.
 - internal/app/web: embedded HTML, CSS and JavaScript; no CDN or frontend build required.
-- /data: private settings.json and catalog.json, atomic replacement.
-- /media: read-only media root from bind mount, NFS or SMB.
+- /data: private settings.json, catalog.json and wishes.json, atomically persisted in the data volume.
+- /media: separate read-only media root from bind mount, NFS or SMB. Never mount media over /data.
 
 The source and Docker build context are under vloader/; Compose deployment files remain in the repository root. The main image includes NFS/CIFS mount helpers; optional startup mounts precede privilege drop to UID/GID 10001.
 

@@ -24,9 +24,9 @@ services:
     ports:
       - "${BIND_ADDRESS}:${PORT}:8080"
     volumes:
-      # Persist settings.json and catalog.json in the plain data directory.
+      # Persistent vloader settings/catalog only. The SMB source is mounted separately at /media.
       - /docker/vloader/data:/data
-      # /media is mounted from SMB by the entrypoint.
+      # Do not mount media at /data; the entrypoint mounts SMB read-only at /media.
     read_only: true
     tmpfs:
       - /tmp:size=16m,noexec,nosuid

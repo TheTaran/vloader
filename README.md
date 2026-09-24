@@ -2,7 +2,7 @@
 
 Users can request movies and series from **Requests** using a manual title, IMDb ID/URL, or TMDb ID/URL. Admins review incoming requests in the same page. Each Emby sync checks approved and pending requests against provider IDs or exact normalized titles; a match marks the request available and provides the individual download link to the requester. For a series, a season download starts a separate browser download for every episode.
 
-Admins can configure an administrator email address and an SMTP server under **Settings → Request email notifications**. vloader sends a plain-text email for each new request using SMTP with mandatory STARTTLS (normally port 587). SMTP settings and the password are stored in `/data/settings.json`; the password is never returned to the browser. If delivery fails, the request remains saved and the error is recorded in the application log. This sends new-request notifications only; user availability notices remain in the web interface.
+Admins can configure an administrator email address and an SMTP server under **Settings → Email notifications**. Save the settings, then use **Send test email** to verify delivery to the configured admin address. vloader sends plain-text mail using SMTP with mandatory STARTTLS (normally port 587). SMTP settings and the password are stored in `/data/settings.json`; the password is never returned to the browser. If delivery fails, the request remains saved and the error is recorded in the application log. This sends new-request notifications only; user availability notices remain in the web interface.
 
 Eine schlanke Go-/Docker-WebGUI für deine Emby-Sammlung. Dunkles Kino-Design, lokale und OIDC-Anmeldung, gespiegelte Bibliotheken mit Metadaten und Bildern sowie Downloads direkt in den Browser.
 
@@ -67,7 +67,7 @@ OIDC_CLIENT_SECRET=
 OIDC_ALLOWED_SUBJECTS=stable-subject-id-1,stable-subject-id-2
 ```
 
-Redirect-URI beim Provider: `${APP_URL}/auth/callback`. Authorization Code Flow mit PKCE S256 und `openid profile` aktivieren. Bei einem vertraulichen Client das Client-Secret setzen. Die erlaubten Werte sind die stabilen `sub`-Claims, nicht E-Mail-Adressen. Die Werte können danach auch im Bereich **Settings → Authentication** gepflegt werden; das Secret wird niemals an den Browser zurückgegeben.
+Redirect-URI beim Provider: `${APP_URL}/auth/callback`. Authorization Code Flow mit PKCE S256 und `openid profile` aktivieren. Bei einem vertraulichen Client das Client-Secret setzen. `OIDC_ALLOWED_SUBJECTS` enthält die exakten stabilen `sub`-Claim-Werte aus den ID-Tokens der Benutzer (kommagetrennt), nicht Scopes wie `openid`, `profile` oder `email` und auch nicht E-Mail-Adressen. Die Werte können danach auch im Bereich **Settings → Authentication** gepflegt werden; das Secret wird niemals an den Browser zurückgegeben.
 
 Alle zugelassenen Benutzer besitzen Administratorrechte und können die gesamte konfigurierte Sammlung sehen. Es gibt keine Übernahme individueller Emby-Benutzerrechte. Siehe [SECURITY.md](SECURITY.md).
 

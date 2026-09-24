@@ -148,6 +148,7 @@ type App struct {
 	origin        string
 	data          string
 	client        *http.Client
+	mediaRoot     string
 	oauth         *oauth2.Config
 	verifier      *oidc.IDTokenVerifier
 	version       string
@@ -177,7 +178,10 @@ func Run() {
 	log.Fatal(s.ListenAndServe())
 }
 func New() (*App, error) {
-	a := &App{data: env("DATA_DIR", "/data"), origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
+	if !path.IsAbs(a.data) || a.data == "/" || a.data == a.mediaRoot || strings.HasPrefix(a.data, a.mediaRoot+"/") || strings.HasPrefix(a.mediaRoot, a.data+"/") {
+		return nil, errors.New("DATA_DIR must be an absolute path separate from the /media source mount")
+	}
 	u, e := url.Parse(a.origin)
 	if e != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.Path != "" {
 		return nil, errors.New("APP_URL must be an origin without trailing slash")
@@ -186,24 +190,18 @@ func New() (*App, error) {
 		return nil, e
 	}
 	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS"), OIDCAdminSubjects: os.Getenv("OIDC_ADMIN_SUBJECTS")}
-	if b, e := os.ReadFile(a.data + "/settings.json"); e == nil {
-		if e = json.Unmarshal(b, &a.cfg); e != nil {
-			return nil, e
-		}
+	if e := loadState(a.data+"/settings.json", &a.cfg); e != nil {
+		return nil, e
 	}
 	if a.cfg.SyncIntervalMinutes <= 0 {
 		a.cfg.SyncIntervalMinutes = 60
 		a.cfg.SyncEnabled = true
 	}
-	if b, e := os.ReadFile(a.data + "/catalog.json"); e == nil {
-		if e = json.Unmarshal(b, &a.catalog); e != nil {
-			return nil, e
-		}
+	if e := loadState(a.data+"/catalog.json", &a.catalog); e != nil {
+		return nil, e
 	}
-	if b, e := os.ReadFile(a.data + "/wishes.json"); e == nil {
-		if e = json.Unmarshal(b, &a.wishes); e != nil {
-			return nil, e
-		}
+	if e := loadState(a.data+"/wishes.json", &a.wishes); e != nil {
+		return nil, e
 	}
 	a.localAuth = env("LOCAL_AUTH_ENABLED", "true") == "true"
 	if a.localAuth {
@@ -255,6 +253,7 @@ func (a *App) configureOIDC(c Config) error {
 		defer cancel()
 		provider, e := oidc.NewProvider(ctx, issuer)
 		if e != nil {
+			log.Print("vloader: OIDC provider discovery failed")
 			return errors.New("OIDC discovery failed")
 		}
 		if c.OIDCClientID == "" || c.OIDCAllowedSubjects == "" {
@@ -272,9 +271,54 @@ func jsonOut(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 func fail(w http.ResponseWriter, status int, msg string) {
+	log.Printf("vloader: request error status=%d reason=%q", status, msg)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	jsonOut(w, map[string]string{"error": msg})
+}
+
+type logResponseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *logResponseWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *logResponseWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+func (w *logResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func requestLogger(mux *http.ServeMux, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, route := mux.Handler(r)
+		if route == "" {
+			route = "unmatched route"
+		}
+		started := time.Now()
+		tracked := &logResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(tracked, r)
+		status := tracked.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		// Avoid logging routine image traffic, static assets, health probes and
+		// polling. Log failures and state-changing/download operations instead.
+		if status >= 400 || strings.HasPrefix(route, "POST /api/") ||
+			strings.HasPrefix(route, "POST /auth/") || route == "GET /api/download/{id}" {
+			log.Printf("vloader: http request method=%s route=%q status=%d duration=%s", r.Method, route, status, time.Since(started).Round(time.Millisecond))
+		}
+	})
 }
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, 65536)
@@ -310,12 +354,13 @@ func (a *App) Handler() http.Handler {
 	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
 	m.Handle("POST /api/settings/notifications", a.adminGuard(http.HandlerFunc(a.saveNotificationSettings)))
+	m.Handle("POST /api/settings/notifications/test", a.adminGuard(http.HandlerFunc(a.testNotificationSettings)))
 	m.Handle("POST /api/sync", a.adminGuard(http.HandlerFunc(a.syncCatalog)))
 	m.Handle("GET /api/images/{id}/{kind}", a.guard(http.HandlerFunc(a.image)))
 	m.Handle("GET /api/download/{id}", a.guard(http.HandlerFunc(a.download)))
 	sub, _ := fs.Sub(assets, "web")
 	m.Handle("/", http.FileServer(http.FS(sub)))
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	secure := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("X-Frame-Options", "DENY")
@@ -327,6 +372,7 @@ func (a *App) Handler() http.Handler {
 		}
 		m.ServeHTTP(w, r)
 	})
+	return requestLogger(m, secure)
 }
 func (a *App) versionStatus(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -518,12 +564,19 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	tok, e := a.oauth.Exchange(ctx, r.URL.Query().Get("code"), oauth2.VerifierOption(f.Verifier))
 	if e != nil {
+		log.Print("vloader: OIDC authorization code exchange failed")
 		fail(w, 401, "OIDC sign-in failed")
 		return
 	}
 	raw, _ := tok.Extra("id_token").(string)
 	id, e := a.verifier.Verify(ctx, raw)
-	if e != nil || id.Nonce != f.Nonce {
+	if e != nil {
+		log.Print("vloader: OIDC ID token verification failed")
+		fail(w, 401, "Invalid ID token")
+		return
+	}
+	if id.Nonce != f.Nonce {
+		log.Print("vloader: OIDC ID token nonce mismatch")
 		fail(w, 401, "Invalid ID token")
 		return
 	}
@@ -549,7 +602,7 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c := a.config()
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != ""})
 }
 
 func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
@@ -594,6 +647,21 @@ func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]bool{"ok": true})
 }
 
+func (a *App) testNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	c := a.config()
+	if c.AdminEmail == "" || c.SMTPHost == "" || c.SMTPPort < 1 || c.SMTPFrom == "" || (c.SMTPUsername != "" && c.SMTPPassword == "") {
+		fail(w, http.StatusBadRequest, "Save complete email notification settings before sending a test")
+		return
+	}
+	if err := sendTestEmail(c); err != nil {
+		log.Printf("vloader: SMTP test email failed host=%q: %v", c.SMTPHost, err)
+		fail(w, http.StatusBadGateway, "Test email failed; check the SMTP settings and vloader logs")
+		return
+	}
+	log.Printf("vloader: SMTP test email sent successfully")
+	jsonOut(w, map[string]bool{"ok": true})
+}
+
 func validEmail(value string) bool {
 	addr, err := mail.ParseAddress(value)
 	return err == nil && addr.Address == value
@@ -601,13 +669,33 @@ func validEmail(value string) bool {
 func persist(file string, v any) error {
 	b, e := json.Marshal(v)
 	if e != nil {
+		log.Printf("vloader: unable to encode persisted state file=%s: %v", path.Base(file), e)
 		return e
 	}
 	tmp := file + ".tmp"
 	if e = os.WriteFile(tmp, b, 0600); e != nil {
+		log.Printf("vloader: unable to write persisted state file=%s: %v", path.Base(file), e)
 		return e
 	}
-	return os.Rename(tmp, file)
+	if e = os.Rename(tmp, file); e != nil {
+		log.Printf("vloader: unable to replace persisted state file=%s: %v", path.Base(file), e)
+		return e
+	}
+	return nil
+}
+
+func loadState(file string, dst any) error {
+	b, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read persisted state file %s: %w", path.Base(file), err)
+	}
+	if err := json.Unmarshal(b, dst); err != nil {
+		return fmt.Errorf("decode persisted state file %s: %w", path.Base(file), err)
+	}
+	return nil
 }
 func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	var c Config
@@ -670,7 +758,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if e := persist(a.data+"/settings.json", c); e != nil {
-		fail(w, 500, "Failed to save settings")
+		fail(w, 500, "Failed to save settings; check that the mounted data directory is writable by UID 10001")
 		return
 	}
 	a.mu.Lock()
@@ -697,9 +785,15 @@ func (a *App) emby(ctx context.Context, c Config, endpoint string) (*http.Respon
 	}
 	res, e := client.Do(req)
 	if e != nil {
+		if host := req.URL.Hostname(); host != "" {
+			log.Printf("vloader: Emby request failed host=%q: %v", host, e)
+		} else {
+			log.Printf("vloader: Emby request failed: %v", e)
+		}
 		return nil, errors.New("Unable to connect to Emby")
 	}
 	if res.StatusCode != 200 {
+		log.Printf("vloader: Emby request returned HTTP %d host=%q", res.StatusCode, req.URL.Hostname())
 		res.Body.Close()
 		return nil, fmt.Errorf("Emby returned HTTP %d", res.StatusCode)
 	}
@@ -711,7 +805,11 @@ func (a *App) fetch(ctx context.Context, c Config, endpoint string, out any) err
 		return e
 	}
 	defer res.Body.Close()
-	return json.NewDecoder(io.LimitReader(res.Body, 32<<20)).Decode(out)
+	if err := json.NewDecoder(io.LimitReader(res.Body, 32<<20)).Decode(out); err != nil {
+		log.Printf("vloader: unable to decode Emby response: %v", err)
+		return err
+	}
+	return nil
 }
 func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 	if !a.syncMu.TryLock() {
@@ -799,7 +897,9 @@ func (a *App) image(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Cache-Control", "private, max-age=3600")
-	io.Copy(w, io.LimitReader(res.Body, 15<<20))
+	if _, err := io.Copy(w, io.LimitReader(res.Body, 15<<20)); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("vloader: image transfer failed: %v", err)
+	}
 }
 func relativeSource(prefix, p string) (string, error) {
 	prefix = path.Clean(prefix)
@@ -825,14 +925,16 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 			fail(w, 403, e.Error())
 			return
 		}
-		root, e := os.OpenRoot(env("MEDIA_ROOT", "/media"))
+		root, e := os.OpenRoot(a.mediaRoot)
 		if e != nil {
+			log.Printf("vloader: source root unavailable: %v", e)
 			fail(w, 503, "Share unavailable")
 			return
 		}
 		defer root.Close()
 		file, e := root.Open(rel)
 		if e != nil {
+			log.Printf("vloader: source file open failed not_found=%t permission_denied=%t", errors.Is(e, os.ErrNotExist), errors.Is(e, os.ErrPermission))
 			fail(w, 404, "Source file unavailable")
 			return
 		}
@@ -861,5 +963,7 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	if n := res.Header.Get("Content-Length"); n != "" {
 		w.Header().Set("Content-Length", n)
 	}
-	io.Copy(w, res.Body)
+	if _, err := io.Copy(w, res.Body); err != nil && !errors.Is(err, context.Canceled) {
+		log.Printf("vloader: download transfer failed: %v", err)
+	}
 }

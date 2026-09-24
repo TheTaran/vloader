@@ -27,3 +27,5 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 .settings-tab.active::after{content:"";position:absolute;left:12px;right:12px;bottom:-1px;height:2px;background:var(--lime);border-radius:2px}
 .settings-tab:focus-visible{outline:2px solid var(--lime);outline-offset:-3px}
 @media(max-width:560px){.settings-tabs{gap:0;margin-top:-4px}.settings-tab{padding:12px 13px;font-size:12px}}
+.oidc-callback-note code{display:inline-block;margin-top:7px;color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+#email-test{margin-top:10px}

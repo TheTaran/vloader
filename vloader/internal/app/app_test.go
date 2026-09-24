@@ -1,9 +1,12 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +15,26 @@ import (
 	"testing"
 	"time"
 )
+
+func TestRequestErrorsAreLoggedWithoutQueryString(t *testing.T) {
+	var logs bytes.Buffer
+	previous := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previous) })
+
+	a := testApp(t)
+	w := request(a, http.MethodGet, "/api/settings?token=must-not-be-logged", "", "", "")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+	got := logs.String()
+	if !strings.Contains(got, `http request method=GET route="GET /api/settings" status=401`) || !strings.Contains(got, `reason="Sign-in required"`) {
+		t.Fatalf("expected request and failure details in logs, got %q", got)
+	}
+	if strings.Contains(got, "must-not-be-logged") {
+		t.Fatalf("request query string leaked to logs: %q", got)
+	}
+}
 
 func testApp(t *testing.T) *App {
 	t.Helper()
@@ -95,6 +118,21 @@ func TestRelativeSource(t *testing.T) {
 	}
 }
 
+func TestMediaMountIsSeparateFromPersistentData(t *testing.T) {
+	t.Setenv("MEDIA_ROOT", "/data")
+	a := testApp(t)
+	if a.data == a.mediaRoot || a.mediaRoot != "/media" {
+		t.Fatalf("persistent data and media mount overlap: data=%q media=%q", a.data, a.mediaRoot)
+	}
+}
+
+func TestDataDirectoryCannotOverlapMediaMount(t *testing.T) {
+	t.Setenv("DATA_DIR", "/media")
+	if _, err := New(); err == nil || !strings.Contains(err.Error(), "separate from the /media source mount") {
+		t.Fatalf("overlapping data directory should be rejected, got %v", err)
+	}
+}
+
 func TestNotificationSettingsAreAdminOnlyAndPersistWithoutLeakingSecret(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
@@ -109,7 +147,7 @@ func TestNotificationSettingsAreAdminOnlyAndPersistWithoutLeakingSecret(t *testi
 		t.Fatalf("admin save failed: %d %s", w.Code, w.Body.String())
 	}
 	w := request(a, "GET", "/api/settings", "", "", "admin-session")
-	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "mail-secret") || !strings.Contains(w.Body.String(), `"HasSMTPPassword":true`) {
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "mail-secret") || !strings.Contains(w.Body.String(), `"HasSMTPPassword":true`) || !strings.Contains(w.Body.String(), `"OIDCCallbackURL":"http://localhost:8090/auth/callback"`) {
 		t.Fatalf("settings response leaked or omitted secret indicator: %d %s", w.Code, w.Body.String())
 	}
 	b, err := os.ReadFile(filepath.Join(a.data, "settings.json"))
@@ -131,10 +169,37 @@ func TestNotificationSettingsRejectInvalidEmailAndHost(t *testing.T) {
 	}
 }
 
+func TestEmailNotificationTestIsAdminOnlyAndRequiresSavedSettings(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+
+	if w := request(a, http.MethodPost, "/api/settings/notifications/test", `{}`, a.origin, "user-session"); w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin could send a test email: %d %s", w.Code, w.Body.String())
+	}
+	if w := request(a, http.MethodPost, "/api/settings/notifications/test", `{}`, a.origin, "admin-session"); w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Save complete email notification settings") {
+		t.Fatalf("incomplete settings should be rejected: %d %s", w.Code, w.Body.String())
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg = Config{AdminEmail: "admin@example.com", SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com"}
+	if w := request(a, http.MethodPost, "/api/settings/notifications/test", `{}`, a.origin, "admin-session"); w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "Test email failed") {
+		t.Fatalf("SMTP connection failure should be reported: %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestMountDownloadAndSymlinkEscape(t *testing.T) {
 	a := testApp(t)
 	root := t.TempDir()
-	t.Setenv("MEDIA_ROOT", root)
+	a.mediaRoot = root
 	if e := os.WriteFile(filepath.Join(root, "movie.mkv"), []byte("movie-data"), 0600); e != nil {
 		t.Fatal(e)
 	}

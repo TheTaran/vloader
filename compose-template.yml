@@ -13,7 +13,8 @@ services:
       LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
       DATA_DIR: /data
     # Optional network source: copy ONE configuration below into compose.yml.
-    # Remove the /media bind mount below when SOURCE_MOUNT is nfs or smb.
+    # /data stores vloader configuration/state only. Never mount the media source there.
+    # Remove any local /media bind mount when SOURCE_MOUNT is nfs or smb.
     # Add these common startup settings for either network source:
     # user: "0:0"
     # cap_add: [SYS_ADMIN, SETUID, SETGID]
@@ -43,7 +44,7 @@ services:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
     volumes:
       # Create this directory and assign it to UID/GID 10001 before starting the container.
-      # Settings and catalog are stored directly here as settings.json and catalog.json.
+      # Settings/catalog live directly in /data. Network media mounts stay separate at /media.
       - ${VLOADER_DATA_DIR:-./data}:/data
     read_only: true
     tmpfs:

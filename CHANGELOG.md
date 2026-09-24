@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+## v0.1.10
+- Display the configured OIDC callback URL in Settings → Authentication.
+- Log failed HTTP requests and relevant persistence, Emby, OIDC and transfer errors to Docker stdout/stderr without recording request query strings or media paths.
+- Add an admin-only SMTP test email action to Settings → Email notifications.
+- Keep the read-only SMB/NFS media root fixed at `/media`, separate from persistent application state in `/data`.
+- Clarify that OIDC allowed subject IDs are `sub` claim values, not scopes or email addresses.
+
 ## v0.1.9
 - Initial Go/Docker application with dark cinema-style responsive UI.
 - Local/OIDC authentication, protected Emby library synchronization, title filters/details and original-file downloads.
