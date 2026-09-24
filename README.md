@@ -84,7 +84,7 @@ Für Pocket ID den Gruppen-Claim dem vloader-OIDC-Client zuweisen und sicherstel
 - `compose-template.yml`: Standardvorlage einschließlich NFS-/SMB-Konfiguration.
 - `.env.example`: kommentierte Variablen.
 - `SECURITY.md`: Sicherheitshinweise und Meldeverfahren.
-- `vloader/docs/`: Architektur und Teststrategie.
+- `vloader/docs/`: Architektur, Teststrategie und Release-Validierung.
 
 Gespeicherte GUI-Einstellungen überschreiben Emby-/Quellen-Startwerte aus `.env`; Änderungen danach über die GUI vornehmen. Lokale Anmeldung wird über `LOCAL_AUTH_ENABLED=true|false` in Compose gesteuert. Bei `false` muss eine vollständige OIDC-Konfiguration vorhanden sein. Ein Serverwechsel verlangt die erneute Eingabe eines API-Schlüssels und eine neue Synchronisierung.
 
