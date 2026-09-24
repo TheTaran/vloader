@@ -55,6 +55,8 @@ type Config struct {
 	SMTPPassword        string
 	SMTPFrom            string
 	TMDBAPIKey          string
+	TVDBAPIKey          string
+	TVDBPIN             string
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
@@ -146,6 +148,10 @@ type App struct {
 	catalog       Catalog
 	wishes        []Wish
 	wishMetadata  map[string]wishMetadataCache
+	tvdbToken     string
+	tvdbExpires   time.Time
+	tvdbKey       string
+	tvdbPIN       string
 	notifications chan Wish
 	sessions      map[string]session
 	roles         map[string]string
@@ -689,12 +695,14 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if claim == "" {
 		claim = "groups"
 	}
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasTMDBAPIKey": c.TMDBAPIKey != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasTMDBAPIKey": c.TMDBAPIKey != "", "HasTVDBAPIKey": c.TVDBAPIKey != "", "HasTVDBPIN": c.TVDBPIN != ""})
 }
 
 func (a *App) saveMetadataSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		TMDBAPIKey string `json:"TMDBAPIKey"`
+		TVDBAPIKey string `json:"TVDBAPIKey"`
+		TVDBPIN    string `json:"TVDBPIN"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -704,11 +712,23 @@ func (a *App) saveMetadataSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "Enter a valid TMDb API Read Access Token")
 		return
 	}
+	in.TVDBAPIKey = strings.TrimSpace(in.TVDBAPIKey)
+	in.TVDBPIN = strings.TrimSpace(in.TVDBPIN)
+	if len(in.TVDBAPIKey) > 512 || strings.ContainsAny(in.TVDBAPIKey, "\r\n \t") || len(in.TVDBPIN) > 512 || strings.ContainsAny(in.TVDBPIN, "\r\n \t") {
+		fail(w, http.StatusBadRequest, "Enter a valid TVDB API key and subscriber PIN")
+		return
+	}
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 	c := a.config()
 	if in.TMDBAPIKey != "" {
 		c.TMDBAPIKey = in.TMDBAPIKey
+	}
+	if in.TVDBAPIKey != "" {
+		c.TVDBAPIKey = in.TVDBAPIKey
+	}
+	if in.TVDBPIN != "" {
+		c.TVDBPIN = in.TVDBPIN
 	}
 	if err := persist(a.data+"/settings.json", c); err != nil {
 		fail(w, http.StatusInternalServerError, "Failed to save metadata settings")
@@ -716,6 +736,9 @@ func (a *App) saveMetadataSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	a.cfg = c
+	a.wishMetadata = map[string]wishMetadataCache{}
+	a.tvdbToken, a.tvdbKey, a.tvdbPIN = "", "", ""
+	a.tvdbExpires = time.Time{}
 	a.mu.Unlock()
 	jsonOut(w, map[string]bool{"ok": true})
 }
@@ -854,6 +877,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	c.AdminEmail, c.SMTPHost, c.SMTPPort, c.SMTPDisableTLS = old.AdminEmail, old.SMTPHost, old.SMTPPort, old.SMTPDisableTLS
 	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = old.SMTPUsername, old.SMTPPassword, old.SMTPFrom
 	c.TMDBAPIKey = old.TMDBAPIKey
+	c.TVDBAPIKey, c.TVDBPIN = old.TVDBAPIKey, old.TVDBPIN
 	if !c.UpdateOIDC && c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
 			fail(w, 400, "Enter the API key again when switching servers")

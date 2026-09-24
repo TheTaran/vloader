@@ -45,6 +45,7 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 .poster{width:85.5%;margin-inline:auto}
 .wish-row{align-items:flex-start}
 .wish-poster{width:76px;height:114px;flex:0 0 76px;object-fit:cover;border-radius:6px;background:#242c24}
+.wish-row{flex-wrap:wrap}.wish-banner{width:100%;height:auto;max-height:260px;aspect-ratio:2.2;object-fit:cover;object-position:center;border-radius:6px;background:#101312}.wish-row:has(.wish-banner:not(.hidden)){align-items:stretch}.tvdb-attribution{max-width:900px;margin:10px 0 22px;color:var(--muted);font-size:11px}.tvdb-attribution a{color:var(--lime)}
 .wish-content{flex:1;min-width:0}
 .wish-reference{display:inline-block;color:var(--lime);font-size:11px;margin:0 0 8px}
 .wish-metadata{color:var(--muted);font-size:12px;margin:6px 0}
@@ -55,6 +56,8 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 .episode-row{display:flex;align-items:center;gap:8px;min-width:0}.episode-list .episode-detail{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.episode-list .episode-download{flex:0 0 auto}
 /* Match poster download controls to the full-size primary episode download button. */
 .poster .download-indicator{right:50%;transform:translateX(50%)}
-.tmdb-logo-link{display:flex;align-items:center;gap:12px;width:max-content;max-width:100%;color:var(--text);font-size:14px}.tmdb-credit .tmdb-logo-link img{width:42px;height:36px;object-fit:contain}.tmdb-attribution .tmdb-logo-link img{width:42px;height:36px;object-fit:contain}
+.tmdb-logo-link{display:flex;align-items:center;gap:12px;width:max-content;max-width:100%;color:var(--text);font-size:14px}.tmdb-credit .tmdb-logo-link img{width:42px;height:36px;object-fit:contain}.tmdb-attribution .tmdb-logo-link img{width:47px;height:34px;object-fit:contain}
 
 .download-action.button.primary,.poster .download-indicator.download-action{box-sizing:border-box;height:25.5px;min-width:54.4px;padding:6.75px 9.75px;border-radius:4.25px;font-size:9px;line-height:12px;gap:0}
+
+.tmdb-attribution{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:6px 12px}.tmdb-credit-heading{grid-column:1/-1;font-size:12px;font-weight:500;color:var(--muted)}.tmdb-attribution .tmdb-logo-link{gap:8px;font-size:12px}.tmdb-attribution .tmdb-logo-link img{width:47px;height:34px}

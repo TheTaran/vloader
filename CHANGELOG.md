@@ -1,3 +1,9 @@
+## Unreleased
+
+## v0.1.13
+- Show wide Emby artwork or TVDB banners on movie and series request cards; configure and store the TVDB API key and optional subscriber PIN in Metadata settings.
+- Show TMDb credits once at the bottom of the page and reduce the logo size by 50%.
+
 # Changelog
 
 ## v0.1.12

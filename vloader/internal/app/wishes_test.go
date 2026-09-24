@@ -179,13 +179,62 @@ func TestFetchWishMetadataFromTMDB(t *testing.T) {
 	}
 }
 
+func TestFetchWishTVDBBannerForMovieAndSeries(t *testing.T) {
+	for _, tc := range []struct{ kind, endpoint, source string }{
+		{"Series", "/series/123/extended", "imdb"},
+		{"Movie", "/movies/456/extended", "manual"},
+	} {
+		t.Run(tc.kind, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				response := func(status int, body string) (*http.Response, error) {
+					return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+				}
+				switch {
+				case r.URL.Path == "/v4/login":
+					var credentials map[string]string
+					if err := json.NewDecoder(r.Body).Decode(&credentials); err != nil || credentials["apikey"] != "tvdb-key" || credentials["pin"] != "subscriber-pin" {
+						t.Fatalf("TVDB credentials not sent correctly: %#v err=%v", credentials, err)
+					}
+					return response(200, `{"data":{"token":"session-token"}}`)
+				case r.URL.Path == "/v4/search":
+					if r.Header.Get("Authorization") != "Bearer session-token" || r.URL.Query().Get("type") != strings.ToLower(tc.kind) {
+						t.Fatalf("TVDB search request invalid: %s auth=%q", r.URL, r.Header.Get("Authorization"))
+					}
+					if tc.source == "imdb" && r.URL.Query().Get("remote_id") != "tt1234567" || tc.source == "manual" && r.URL.Query().Get("query") != "Example Title" {
+						t.Fatalf("TVDB search did not use the intended request reference: %s", r.URL)
+					}
+					return response(200, `{"data":[{"id":"`+map[string]string{"Series": "123", "Movie": "456"}[tc.kind]+`","tvdb_id":"`+map[string]string{"Series": "123", "Movie": "456"}[tc.kind]+`","name":"Example Title","type":"`+strings.ToLower(tc.kind)+`"}]}`)
+				case r.URL.Path == "/v4"+tc.endpoint:
+					return response(200, `{"data":{"artworks":[{"image":"https://artworks.thetvdb.com/wide-fanart.jpg","type":1,"width":1920,"height":1080},{"image":"https://artworks.thetvdb.com/poster.jpg","type":2,"width":500,"height":750}]}}`)
+				default:
+					t.Fatalf("unexpected TVDB request: %s", r.URL)
+					return nil, fmt.Errorf("unexpected TVDB request")
+				}
+			})}
+			got, err := fetchWishTVDBBanner(t.Context(), client, "tvdb-key", "subscriber-pin", Wish{Type: tc.kind, Source: tc.source, ExternalID: "tt1234567", Title: "Example Title"})
+			if err != nil || got != "https://artworks.thetvdb.com/wide-fanart.jpg" {
+				t.Fatalf("TVDB banner = %q err=%v", got, err)
+			}
+		})
+	}
+}
+
+func TestSafeTVDBImageURLRejectsExternalHosts(t *testing.T) {
+	if got := safeTVDBImageURL("https://evil.example/image.jpg"); got != "" {
+		t.Fatalf("accepted external artwork host: %q", got)
+	}
+	if got := safeTVDBImageURL("http://artworks.thetvdb.com/image.jpg"); got != "" {
+		t.Fatalf("accepted insecure artwork url: %q", got)
+	}
+}
+
 func TestSaveMetadataSettingsIsAdminOnlyAndSecretIsRedacted(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
 	sessionRoles.Store("user-session", "user")
 	t.Cleanup(func() { sessionRoles.Delete("user-session") })
-	body := `{"TMDBAPIKey":"private-read-token"}`
+	body := `{"TMDBAPIKey":"private-read-token","TVDBAPIKey":"private-tvdb-key","TVDBPIN":"private-pin"}`
 	if got := request(a, http.MethodPost, "/api/settings/metadata", body, a.origin, "user-session"); got.Code != http.StatusForbidden {
 		t.Fatalf("regular user changed metadata settings: %d", got.Code)
 	}
@@ -193,7 +242,7 @@ func TestSaveMetadataSettingsIsAdminOnlyAndSecretIsRedacted(t *testing.T) {
 		t.Fatalf("admin could not save metadata settings: %d %s", got.Code, got.Body.String())
 	}
 	settings := request(a, http.MethodGet, "/api/settings", "", "", "admin-session")
-	if !strings.Contains(settings.Body.String(), `"HasTMDBAPIKey":true`) || strings.Contains(settings.Body.String(), "private-read-token") {
+	if !strings.Contains(settings.Body.String(), `"HasTMDBAPIKey":true`) || !strings.Contains(settings.Body.String(), `"HasTVDBAPIKey":true`) || !strings.Contains(settings.Body.String(), `"HasTVDBPIN":true`) || strings.Contains(settings.Body.String(), "private-read-token") || strings.Contains(settings.Body.String(), "private-tvdb-key") || strings.Contains(settings.Body.String(), "private-pin") {
 		t.Fatal("metadata settings did not persist safely or exposed the API token")
 	}
 }

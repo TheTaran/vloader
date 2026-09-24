@@ -28,6 +28,7 @@ type WishMetadata struct {
 	Genres      []string `json:"genres,omitempty"`
 	Rating      float64  `json:"rating,omitempty"`
 	Runtime     int      `json:"runtime,omitempty"`
+	BannerURL   string   `json:"bannerUrl,omitempty"`
 }
 
 type wishMetadataCache struct {
@@ -54,7 +55,7 @@ func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
 			items = append(items, wish)
 		}
 	}
-	jsonOut(w, map[string]any{"items": items, "admin": admin, "metadataEnabled": a.cfg.TMDBAPIKey != ""})
+	jsonOut(w, map[string]any{"items": items, "admin": admin, "metadataEnabled": a.cfg.TMDBAPIKey != "" || a.cfg.TVDBAPIKey != "", "tmdbEnabled": a.cfg.TMDBAPIKey != "", "tvdbEnabled": a.cfg.TVDBAPIKey != ""})
 }
 
 func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {
@@ -73,13 +74,9 @@ func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusNotFound, "Request not found")
 		return
 	}
-	if wish.Source != "imdb" && wish.Source != "tmdb" {
-		fail(w, http.StatusNotFound, "No external title reference for this request")
-		return
-	}
 	cfg := a.config()
-	if cfg.TMDBAPIKey == "" {
-		fail(w, http.StatusFailedDependency, "Configure a TMDb API Read Access Token in Settings, Metadata to load title details")
+	if cfg.TMDBAPIKey == "" && cfg.TVDBAPIKey == "" {
+		fail(w, http.StatusFailedDependency, "Configure a TMDb or TVDB API key in Settings, Metadata to load request artwork")
 		return
 	}
 	a.mu.RLock()
@@ -91,16 +88,224 @@ func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	metadata, err := fetchWishMetadata(ctx, a.client, cfg.TMDBAPIKey, wish)
-	if err != nil {
-		log.Printf("vloader: TMDb metadata lookup failed for request %s: %v", wish.ID, err)
-		fail(w, http.StatusBadGateway, "Could not load external title details; verify the TMDb API Read Access Token")
-		return
+	metadata := WishMetadata{Title: wish.Title}
+	if cfg.TMDBAPIKey != "" && (wish.Source == "imdb" || wish.Source == "tmdb") {
+		tmdb, err := fetchWishMetadata(ctx, a.client, cfg.TMDBAPIKey, wish)
+		if err == nil {
+			metadata = tmdb
+		} else {
+			log.Printf("vloader: TMDb metadata lookup failed for request %s: %v", wish.ID, err)
+		}
+	}
+	if cfg.TVDBAPIKey != "" {
+		token, err := a.tvdbAccessToken(ctx, cfg)
+		if err == nil {
+			var banner string
+			banner, err = fetchWishTVDBBannerWithToken(ctx, a.client, token, wish)
+			if err == nil {
+				metadata.BannerURL = banner
+			}
+		}
+		if err != nil {
+			log.Printf("vloader: TVDB banner lookup failed for request %s: %v", wish.ID, err)
+		}
+	}
+	if metadata.Title == "" {
+		metadata.Title = wish.Title
 	}
 	a.mu.Lock()
 	a.wishMetadata[wish.ID] = wishMetadataCache{Metadata: metadata, Expires: time.Now().Add(6 * time.Hour)}
 	a.mu.Unlock()
 	jsonOut(w, metadata)
+}
+
+type tvdbArtwork struct {
+	Image  string `json:"image"`
+	Type   int    `json:"type"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+}
+
+type tvdbSearchRecord struct {
+	ID       string `json:"id"`
+	TVDBID   string `json:"tvdb_id"`
+	Name     string `json:"name"`
+	Title    string `json:"title"`
+	ImageURL string `json:"image_url"`
+	Overview string `json:"overview"`
+	Type     string `json:"type"`
+}
+
+// fetchWishTVDBBanner uses the official TVDB v4 API. It deliberately returns
+// only artwork URLs from TVDB's own image host, never a URL supplied by users.
+func fetchWishTVDBBanner(ctx context.Context, baseClient *http.Client, apiKey, pin string, wish Wish) (string, error) {
+	token, err := fetchTVDBAccessToken(ctx, baseClient, apiKey, pin)
+	if err != nil {
+		return "", err
+	}
+	return fetchWishTVDBBannerWithToken(ctx, baseClient, token, wish)
+}
+
+func (a *App) tvdbAccessToken(ctx context.Context, cfg Config) (string, error) {
+	a.mu.RLock()
+	if a.tvdbToken != "" && a.tvdbKey == cfg.TVDBAPIKey && a.tvdbPIN == cfg.TVDBPIN && time.Now().Before(a.tvdbExpires) {
+		token := a.tvdbToken
+		a.mu.RUnlock()
+		return token, nil
+	}
+	a.mu.RUnlock()
+	token, err := fetchTVDBAccessToken(ctx, a.client, cfg.TVDBAPIKey, cfg.TVDBPIN)
+	if err != nil {
+		return "", err
+	}
+	a.mu.Lock()
+	if a.cfg.TVDBAPIKey == cfg.TVDBAPIKey && a.cfg.TVDBPIN == cfg.TVDBPIN {
+		a.tvdbToken, a.tvdbKey, a.tvdbPIN = token, cfg.TVDBAPIKey, cfg.TVDBPIN
+		a.tvdbExpires = time.Now().Add(29 * 24 * time.Hour)
+	}
+	a.mu.Unlock()
+	return token, nil
+}
+
+func fetchTVDBAccessToken(ctx context.Context, baseClient *http.Client, apiKey, pin string) (string, error) {
+	client := *baseClient
+	client.Timeout = 8 * time.Second
+	login := map[string]string{"apikey": apiKey}
+	if pin != "" {
+		login["pin"] = pin
+	}
+	body, _ := json.Marshal(login)
+	var auth struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := tvdbJSONRequest(ctx, &client, http.MethodPost, "/login", "", strings.NewReader(string(body)), &auth); err != nil {
+		return "", err
+	}
+	if auth.Data.Token == "" {
+		return "", fmt.Errorf("TVDB login response did not contain a token")
+	}
+	return auth.Data.Token, nil
+}
+
+func fetchWishTVDBBannerWithToken(ctx context.Context, baseClient *http.Client, token string, wish Wish) (string, error) {
+	client := *baseClient
+	client.Timeout = 8 * time.Second
+	kind := "series"
+	if wish.Type == "Movie" {
+		kind = "movie"
+	}
+	query := url.Values{}
+	query.Set("type", kind)
+	if wish.Source == "imdb" && imdbIDPattern.MatchString(wish.ExternalID) {
+		query.Set("remote_id", wish.ExternalID)
+	} else {
+		query.Set("query", wish.Title)
+	}
+	var search struct {
+		Data []tvdbSearchRecord `json:"data"`
+	}
+	if err := tvdbJSONRequest(ctx, &client, http.MethodGet, "/search?"+query.Encode(), token, nil, &search); err != nil {
+		return "", err
+	}
+	var record *tvdbSearchRecord
+	for i := range search.Data {
+		candidate := &search.Data[i]
+		if strings.EqualFold(candidate.Type, kind) || candidate.Type == "" {
+			name := candidate.Name
+			if name == "" {
+				name = candidate.Title
+			}
+			if normalizedTitle(name) == normalizedTitle(wish.Title) {
+				record = candidate
+				break
+			}
+			if record == nil {
+				record = candidate
+			}
+		}
+	}
+	if record == nil {
+		return "", nil
+	}
+	id := record.TVDBID
+	if id == "" {
+		id = record.ID
+	}
+	id = strings.TrimPrefix(id, kind+"-")
+	if id == "" || strings.Trim(id, "0123456789") != "" {
+		return "", nil
+	}
+	var details struct {
+		Data struct {
+			Artworks []tvdbArtwork `json:"artworks"`
+		} `json:"data"`
+	}
+	endpoint := "/series/" + id + "/extended"
+	if kind == "movie" {
+		endpoint = "/movies/" + id + "/extended"
+	}
+	if err := tvdbJSONRequest(ctx, &client, http.MethodGet, endpoint, token, nil, &details); err != nil {
+		return "", err
+	}
+	return selectTVDBBanner(details.Data.Artworks), nil
+}
+
+func tvdbJSONRequest(ctx context.Context, client *http.Client, method, endpoint, token string, body io.Reader, target any) error {
+	req, err := http.NewRequestWithContext(ctx, method, "https://api4.thetvdb.com/v4"+endpoint, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("TVDB returned HTTP %d", res.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, 2<<20)).Decode(target); err != nil {
+		return fmt.Errorf("invalid TVDB response")
+	}
+	return nil
+}
+
+func selectTVDBBanner(artworks []tvdbArtwork) string {
+	bestURL, bestScore := "", 0.0
+	for _, artwork := range artworks {
+		image := safeTVDBImageURL(artwork.Image)
+		if image == "" {
+			continue
+		}
+		ratio := float64(artwork.Width) / float64(max(artwork.Height, 1))
+		if ratio < 1.3 {
+			continue
+		}
+		score := ratio
+		if ratio >= 1.3 && ratio <= 2.2 {
+			score += 10
+		} // prefer a wide fanart/background over a very thin logo strip
+		if score > bestScore {
+			bestURL, bestScore = image, score
+		}
+	}
+	return bestURL
+}
+
+func safeTVDBImageURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || !(u.Host == "thetvdb.com" || strings.HasSuffix(u.Host, ".thetvdb.com")) {
+		return ""
+	}
+	return u.String()
 }
 
 type tmdbSearchResult struct {
