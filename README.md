@@ -1,5 +1,9 @@
 # vloader
 
+Users can request movies and series from **Requests** using a manual title, IMDb ID/URL, or TMDb ID/URL. Admins review incoming requests in the same page. Each Emby sync checks approved and pending requests against provider IDs or exact normalized titles; a match marks the request available and provides the individual download link to the requester. For a series, a season download starts a separate browser download for every episode.
+
+Admins can configure an administrator email address and an SMTP server under **Settings → Request email notifications**. vloader sends a plain-text email for each new request using SMTP with mandatory STARTTLS (normally port 587). SMTP settings and the password are stored in `/data/settings.json`; the password is never returned to the browser. If delivery fails, the request remains saved and the error is recorded in the application log. This sends new-request notifications only; user availability notices remain in the web interface.
+
 Eine schlanke Go-/Docker-WebGUI für deine Emby-Sammlung. Dunkles Kino-Design, lokale und OIDC-Anmeldung, gespiegelte Bibliotheken mit Metadaten und Bildern sowie Downloads direkt in den Browser.
 
 ## Start
@@ -31,7 +35,8 @@ Alle Varianten stehen kommentiert in **compose-template.yml**. Die tatsächlich 
 
 ### Freigabe aktivieren
 
-1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen. Den `/data`-Bind-Mount beibehalten; dort werden `settings.json` und `catalog.json` auf dem Host gespeichert.
+1. Den lokalen `/media`-Bind-Mount aus `services.vloader.volumes` entfernen. Den `/data`-Bind-Mount beibehalten; `settings.json` und `catalog.json` werden direkt in diesem Verzeichnis gespeichert. Für den Standardpfad zuerst `mkdir -p ./data && sudo chown 10001:10001 ./data && sudo chmod 700 ./data` ausführen.
+   Bestehende Installationen, die bisher `./.vloader` verwendet haben, müssen `settings.json` und `catalog.json` einmalig nach `./data` verschieben und dem Verzeichnis UID/GID `10001:10001` zuweisen.
 2. Die gemeinsamen Mount-Einstellungen aus der Vorlage übernehmen: Startbenutzer `0:0`, `SYS_ADMIN`, `SETUID`, `SETGID` und das dort angegebene `security_opt`.
 3. Genau eine `environment`-Variante übernehmen: `SOURCE_MOUNT: nfs` oder `SOURCE_MOUNT: smb`.
 4. NFS-Server und Export beziehungsweise SMB-Server und Freigabe sowie die Mount-Credentials in `.env` eintragen. Für SMB zusätzlich die vollständige SMB-`cap_add`-Zeile (einschließlich `DAC_READ_SEARCH`, `DAC_OVERRIDE`) und die Secret-Definition aus der Vorlage in `compose.yml` übernehmen.

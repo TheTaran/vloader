@@ -53,5 +53,4 @@ secrets/
 
 settings.json
 catalog.json
-
-.vloader/
+wishes.json

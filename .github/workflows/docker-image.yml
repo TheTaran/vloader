@@ -131,6 +131,8 @@ jobs:
           context: ./vloader
           load: true
           push: false
+          build-args: |
+            APP_VERSION=${{ steps.release.outputs.tag || 'development' }}
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
@@ -150,6 +152,8 @@ jobs:
         with:
           context: ./vloader
           push: true
+          build-args: |
+            APP_VERSION=${{ steps.release.outputs.tag }}
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}

@@ -63,10 +63,8 @@ esac
 
 # The HTTP process never runs as root, including after privileged mount setup.
 if [ "$(id -u)" = 0 ]; then
-    # Keep persistent application state inside the host-provided /data mount.
-    # The repository root itself may be owned by the deployment user.
-    mkdir -p /data/.vloader 2>/dev/null || true
-    export DATA_DIR=/data/.vloader
+    # Persistent state is stored directly in the host-provided /data mount.
+    export DATA_DIR=/data
     exec su-exec 10001:10001 "$@"
 fi
 exec "$@"

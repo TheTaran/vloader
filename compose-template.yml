@@ -1,13 +1,17 @@
 name: vloader
 services:
   vloader:
-    build: ./vloader
+    build:
+      context: ./vloader
+      # Set APP_VERSION to the installed release tag, for example v0.1.8.
+      args:
+        APP_VERSION: ${APP_VERSION:-dev}
     image: vloader:dev
     restart: unless-stopped
     env_file: .env
     environment:
       LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
-      DATA_DIR: /data/.vloader
+      DATA_DIR: /data
     # Optional network source: copy ONE configuration below into compose.yml.
     # Remove the /media bind mount below when SOURCE_MOUNT is nfs or smb.
     # Add these common startup settings for either network source:
@@ -38,7 +42,8 @@ services:
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
     volumes:
-      # Bind this to a host directory so Settings and the catalog survive container replacement.
+      # Create this directory and assign it to UID/GID 10001 before starting the container.
+      # Settings and catalog are stored directly here as settings.json and catalog.json.
       - ${VLOADER_DATA_DIR:-./data}:/data
     read_only: true
     tmpfs:

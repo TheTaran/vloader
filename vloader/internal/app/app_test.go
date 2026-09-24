@@ -94,6 +94,43 @@ func TestRelativeSource(t *testing.T) {
 		}
 	}
 }
+
+func TestNotificationSettingsAreAdminOnlyAndPersistWithoutLeakingSecret(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+	body := `{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPUsername":"mailer","SMTPPassword":"mail-secret","SMTPFrom":"vloader@example.com"}`
+	if w := request(a, "POST", "/api/settings/notifications", body, a.origin, "user-session"); w.Code != http.StatusForbidden {
+		t.Fatalf("non-admin could change email settings: %d %s", w.Code, w.Body.String())
+	}
+	if w := request(a, "POST", "/api/settings/notifications", body, a.origin, "admin-session"); w.Code != http.StatusOK {
+		t.Fatalf("admin save failed: %d %s", w.Code, w.Body.String())
+	}
+	w := request(a, "GET", "/api/settings", "", "", "admin-session")
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "mail-secret") || !strings.Contains(w.Body.String(), `"HasSMTPPassword":true`) {
+		t.Fatalf("settings response leaked or omitted secret indicator: %d %s", w.Code, w.Body.String())
+	}
+	b, err := os.ReadFile(filepath.Join(a.data, "settings.json"))
+	if err != nil || !strings.Contains(string(b), `"SMTPPassword":"mail-secret"`) {
+		t.Fatalf("notification settings were not persisted: %v %s", err, b)
+	}
+}
+
+func TestNotificationSettingsRejectInvalidEmailAndHost(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	for _, body := range []string{
+		`{"AdminEmail":"bad","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPFrom":"vloader@example.com"}`,
+		`{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com\r\nRCPT TO:attacker@example.com","SMTPPort":587,"SMTPFrom":"vloader@example.com"}`,
+	} {
+		if w := request(a, "POST", "/api/settings/notifications", body, a.origin, "admin-session"); w.Code != http.StatusBadRequest {
+			t.Fatalf("invalid notification settings accepted: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestMountDownloadAndSymlinkEscape(t *testing.T) {
 	a := testApp(t)
 	root := t.TempDir()

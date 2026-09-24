@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — 0.1.0
+## v0.1.9
 - Initial Go/Docker application with dark cinema-style responsive UI.
 - Local/OIDC authentication, protected Emby library synchronization, title filters/details and original-file downloads.
 - Read-only source mounts, Docker templates, project and security workflows, regression tests and CI.
@@ -12,3 +12,4 @@
 - Integrate read-only NFS/SMB startup support into the main image and consolidate all source options in compose-template.yml.
 
 - Translate the WebGUI, accessibility labels, date formatting and API feedback into English.
+- Reduce the left navigation text size and add admin-only SMTP email notifications for new title requests.

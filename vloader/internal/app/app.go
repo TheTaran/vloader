@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net/http"
 	"net/http/httptest"
+	"net/mail"
 	"net/url"
 	"os"
 	"path"
@@ -43,6 +44,12 @@ type Config struct {
 	UpdateOIDC          bool
 	SyncEnabled         bool
 	SyncIntervalMinutes int
+	AdminEmail          string
+	SMTPHost            string
+	SMTPPort            int
+	SMTPUsername        string
+	SMTPPassword        string
+	SMTPFrom            string
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
@@ -57,6 +64,7 @@ type Item struct {
 	CommunityRating   float64
 	RunTimeTicks      int64
 	Genres            []string
+	ProviderIDs       map[string]string `json:"ProviderIds"`
 	ImageTags         map[string]string
 	BackdropImageTags []string
 	ParentID          string `json:"ParentId"`
@@ -100,6 +108,19 @@ type Catalog struct {
 	Items     []Item
 	Updated   time.Time
 }
+type Wish struct {
+	ID         string    `json:"id"`
+	Requester  string    `json:"requester"`
+	Title      string    `json:"title"`
+	Type       string    `json:"type"`
+	Source     string    `json:"source"`
+	ExternalID string    `json:"externalId,omitempty"`
+	SourceURL  string    `json:"sourceUrl,omitempty"`
+	Status     string    `json:"status"`
+	ItemID     string    `json:"itemId,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
+	UpdatedAt  time.Time `json:"updatedAt"`
+}
 type session struct {
 	User   string
 	Expiry time.Time
@@ -112,21 +133,24 @@ type flow struct {
 	Expiry          time.Time
 }
 type App struct {
-	mu        sync.RWMutex
-	syncMu    sync.Mutex
-	cfg       Config
-	catalog   Catalog
-	sessions  map[string]session
-	roles     map[string]string
-	flows     map[string]flow
-	attempts  map[string]time.Time
-	password  []byte
-	localAuth bool
-	origin    string
-	data      string
-	client    *http.Client
-	oauth     *oauth2.Config
-	verifier  *oidc.IDTokenVerifier
+	mu            sync.RWMutex
+	syncMu        sync.Mutex
+	cfg           Config
+	catalog       Catalog
+	wishes        []Wish
+	notifications chan Wish
+	sessions      map[string]session
+	roles         map[string]string
+	flows         map[string]flow
+	attempts      map[string]time.Time
+	password      []byte
+	localAuth     bool
+	origin        string
+	data          string
+	client        *http.Client
+	oauth         *oauth2.Config
+	verifier      *oidc.IDTokenVerifier
+	version       string
 }
 
 func random() string {
@@ -147,12 +171,13 @@ func Run() {
 	if e != nil {
 		log.Fatal(e)
 	}
+	go a.notificationWorker()
 	s := &http.Server{Addr: ":8080", Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	log.Print("vloader listening on :8080")
 	log.Fatal(s.ListenAndServe())
 }
 func New() (*App, error) {
-	a := &App{data: env("DATA_DIR", "/data"), origin: env("APP_URL", "http://localhost:8090"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &App{data: env("DATA_DIR", "/data"), origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
 	u, e := url.Parse(a.origin)
 	if e != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.Path != "" {
 		return nil, errors.New("APP_URL must be an origin without trailing slash")
@@ -172,6 +197,11 @@ func New() (*App, error) {
 	}
 	if b, e := os.ReadFile(a.data + "/catalog.json"); e == nil {
 		if e = json.Unmarshal(b, &a.catalog); e != nil {
+			return nil, e
+		}
+	}
+	if b, e := os.ReadFile(a.data + "/wishes.json"); e == nil {
+		if e = json.Unmarshal(b, &a.wishes); e != nil {
 			return nil, e
 		}
 	}
@@ -260,6 +290,7 @@ func (a *App) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { jsonOut(w, map[string]string{"status": "ok"}) })
 	m.HandleFunc("GET /api/session", a.me)
+	m.HandleFunc("GET /api/version", a.versionStatus)
 	m.HandleFunc("POST /auth/login", a.login)
 	m.HandleFunc("POST /auth/logout", a.logout)
 	m.HandleFunc("GET /auth/oidc", a.oidcStart)
@@ -273,8 +304,12 @@ func (a *App) Handler() http.Handler {
 		}
 		jsonOut(w, a.catalog)
 	})))
+	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
+	m.Handle("POST /api/wishes", a.guard(http.HandlerFunc(a.createWish)))
+	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))
 	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
+	m.Handle("POST /api/settings/notifications", a.adminGuard(http.HandlerFunc(a.saveNotificationSettings)))
 	m.Handle("POST /api/sync", a.adminGuard(http.HandlerFunc(a.syncCatalog)))
 	m.Handle("GET /api/images/{id}/{kind}", a.guard(http.HandlerFunc(a.image)))
 	m.Handle("GET /api/download/{id}", a.guard(http.HandlerFunc(a.download)))
@@ -291,6 +326,41 @@ func (a *App) Handler() http.Handler {
 			return
 		}
 		m.ServeHTTP(w, r)
+	})
+}
+func (a *App) versionStatus(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/TheTaran/vloader/releases/latest", nil)
+	if err != nil {
+		jsonOut(w, map[string]any{"currentVersion": a.version, "available": false})
+		return
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "vloader-version-check")
+	res, err := a.client.Do(req)
+	if err != nil {
+		jsonOut(w, map[string]any{"currentVersion": a.version, "available": false})
+		return
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		jsonOut(w, map[string]any{"currentVersion": a.version, "available": false})
+		return
+	}
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, 64<<10)).Decode(&release); err != nil || release.TagName == "" {
+		jsonOut(w, map[string]any{"currentVersion": a.version, "available": false})
+		return
+	}
+	normalize := func(v string) string { return strings.TrimPrefix(strings.TrimSpace(v), "v") }
+	jsonOut(w, map[string]any{
+		"currentVersion":  a.version,
+		"latestVersion":   release.TagName,
+		"available":       true,
+		"updateAvailable": normalize(a.version) != normalize(release.TagName),
 	})
 }
 func (a *App) user(r *http.Request) string {
@@ -479,7 +549,54 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c := a.config()
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != ""})
+}
+
+func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		AdminEmail   string `json:"AdminEmail"`
+		SMTPHost     string `json:"SMTPHost"`
+		SMTPPort     int    `json:"SMTPPort"`
+		SMTPUsername string `json:"SMTPUsername"`
+		SMTPPassword string `json:"SMTPPassword"`
+		SMTPFrom     string `json:"SMTPFrom"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.AdminEmail = strings.TrimSpace(in.AdminEmail)
+	in.SMTPHost = strings.TrimSpace(in.SMTPHost)
+	in.SMTPUsername = strings.TrimSpace(in.SMTPUsername)
+	in.SMTPFrom = strings.TrimSpace(in.SMTPFrom)
+	if in.AdminEmail == "" || !validEmail(in.AdminEmail) || in.SMTPHost == "" || strings.ContainsAny(in.SMTPHost, " /\\\r\n:@") || in.SMTPPort < 1 || in.SMTPPort > 65535 || !validEmail(in.SMTPFrom) || strings.ContainsAny(in.SMTPUsername, "\r\n") || strings.ContainsAny(in.SMTPPassword, "\r\n") {
+		fail(w, http.StatusBadRequest, "Enter a valid admin email, SMTP host and port, and sender email")
+		return
+	}
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	c := a.config()
+	if in.SMTPPassword == "" {
+		in.SMTPPassword = c.SMTPPassword
+	}
+	if in.SMTPUsername != "" && in.SMTPPassword == "" {
+		fail(w, http.StatusBadRequest, "Enter the SMTP password when SMTP authentication is enabled")
+		return
+	}
+	c.AdminEmail, c.SMTPHost, c.SMTPPort = in.AdminEmail, in.SMTPHost, in.SMTPPort
+	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = in.SMTPUsername, in.SMTPPassword, in.SMTPFrom
+	if err := persist(a.data+"/settings.json", c); err != nil {
+		fail(w, http.StatusInternalServerError, "Failed to save notification settings")
+		return
+	}
+	a.mu.Lock()
+	a.cfg = c
+	a.mu.Unlock()
+	jsonOut(w, map[string]bool{"ok": true})
+}
+
+func validEmail(value string) bool {
+	addr, err := mail.ParseAddress(value)
+	return err == nil && addr.Address == value
 }
 func persist(file string, v any) error {
 	b, e := json.Marshal(v)
@@ -518,6 +635,10 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if !c.UpdateOIDC {
 		c.OIDCIssuer, c.OIDCClientID, c.OIDCClientSecret, c.OIDCAllowedSubjects, c.OIDCAdminSubjects = old.OIDCIssuer, old.OIDCClientID, old.OIDCClientSecret, old.OIDCAllowedSubjects, old.OIDCAdminSubjects
 	}
+	// Notifications are edited through their own admin-only form and must survive
+	// saves from the connection and authentication forms.
+	c.AdminEmail, c.SMTPHost, c.SMTPPort = old.AdminEmail, old.SMTPHost, old.SMTPPort
+	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = old.SMTPUsername, old.SMTPPassword, old.SMTPFrom
 	if c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
 			fail(w, 400, "Enter the API key again when switching servers")
@@ -611,7 +732,7 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 				Items            []Item
 				TotalRecordCount int
 			}
-			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "Fields": {"Overview,Path,Genres,MediaSources,MediaStreams,PremiereDate,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
+			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
 			if e := a.fetch(r.Context(), c, "/Items?"+q.Encode(), &page); e != nil {
 				fail(w, 502, e.Error())
 				return
@@ -636,6 +757,11 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	a.catalog = next
+	if a.resolveWishesLocked(next) {
+		if err := a.persistWishesLocked(); err != nil {
+			log.Printf("failed to persist wish availability: %v", err)
+		}
+	}
 	a.mu.Unlock()
 	jsonOut(w, next)
 }
