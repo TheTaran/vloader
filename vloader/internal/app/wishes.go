@@ -19,6 +19,7 @@ import (
 
 var imdbIDPattern = regexp.MustCompile(`^tt[0-9]{5,12}$`)
 var tmdbIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,11}$`)
+var tvdbIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,11}$`)
 
 type WishMetadata struct {
 	Title       string   `json:"title"`
@@ -57,7 +58,8 @@ func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
 			items = append(items, wish)
 		}
 	}
-	jsonOut(w, map[string]any{"items": items, "admin": admin, "metadataEnabled": a.cfg.TMDBAPIKey != "" || a.cfg.TVDBAPIKey != "", "tmdbEnabled": a.cfg.TMDBAPIKey != "", "tvdbEnabled": a.cfg.TVDBAPIKey != ""})
+	arrEnabled := a.cfg.RadarrURL != "" || a.cfg.SonarrURL != ""
+	jsonOut(w, map[string]any{"items": items, "admin": admin, "metadataEnabled": arrEnabled, "tmdbEnabled": false, "tvdbEnabled": false})
 }
 
 func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {
@@ -77,8 +79,8 @@ func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := a.config()
-	if cfg.TMDBAPIKey == "" && cfg.TVDBAPIKey == "" {
-		fail(w, http.StatusFailedDependency, "Configure a TMDb or TVDB API key in Settings, Metadata to load request artwork")
+	if cfg.RadarrURL == "" && cfg.SonarrURL == "" {
+		fail(w, http.StatusFailedDependency, "Configure Radarr or Sonarr in Settings, Automation to load request details")
 		return
 	}
 	a.mu.RLock()
@@ -91,25 +93,12 @@ func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	metadata := WishMetadata{Title: wish.Title}
-	if cfg.TMDBAPIKey != "" && (wish.Source == "imdb" || wish.Source == "tmdb") {
-		tmdb, err := fetchWishMetadata(ctx, a.client, cfg.TMDBAPIKey, wish)
+	if wish.Type == "Movie" && cfg.RadarrURL != "" || wish.Type == "Series" && cfg.SonarrURL != "" {
+		arrMetadata, err := a.fetchArrWishMetadata(ctx, cfg, wish)
 		if err == nil {
-			metadata = tmdb
+			metadata = arrMetadata
 		} else {
-			log.Printf("vloader: TMDb metadata lookup failed for request %s: %v", wish.ID, err)
-		}
-	}
-	if cfg.TVDBAPIKey != "" {
-		token, err := a.tvdbAccessToken(ctx, cfg)
-		if err == nil {
-			var banner string
-			banner, err = fetchWishTVDBBannerWithToken(ctx, a.client, token, wish)
-			if err == nil {
-				metadata.BannerURL = banner
-			}
-		}
-		if err != nil {
-			log.Printf("vloader: TVDB banner lookup failed for request %s: %v", wish.ID, err)
+			log.Printf("vloader: Arr metadata lookup failed for request %s: %v", wish.ID, err)
 		}
 	}
 	if metadata.Title == "" {
@@ -146,27 +135,6 @@ func fetchWishTVDBBanner(ctx context.Context, baseClient *http.Client, apiKey, p
 		return "", err
 	}
 	return fetchWishTVDBBannerWithToken(ctx, baseClient, token, wish)
-}
-
-func (a *App) tvdbAccessToken(ctx context.Context, cfg Config) (string, error) {
-	a.mu.RLock()
-	if a.tvdbToken != "" && a.tvdbKey == cfg.TVDBAPIKey && a.tvdbPIN == cfg.TVDBPIN && time.Now().Before(a.tvdbExpires) {
-		token := a.tvdbToken
-		a.mu.RUnlock()
-		return token, nil
-	}
-	a.mu.RUnlock()
-	token, err := fetchTVDBAccessToken(ctx, a.client, cfg.TVDBAPIKey, cfg.TVDBPIN)
-	if err != nil {
-		return "", err
-	}
-	a.mu.Lock()
-	if a.cfg.TVDBAPIKey == cfg.TVDBAPIKey && a.cfg.TVDBPIN == cfg.TVDBPIN {
-		a.tvdbToken, a.tvdbKey, a.tvdbPIN = token, cfg.TVDBAPIKey, cfg.TVDBPIN
-		a.tvdbExpires = time.Now().Add(29 * 24 * time.Hour)
-	}
-	a.mu.Unlock()
-	return token, nil
 }
 
 func fetchTVDBAccessToken(ctx context.Context, baseClient *http.Client, apiKey, pin string) (string, error) {
@@ -432,7 +400,7 @@ func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
 	}
 	ref, sourceURL, ok := normalizeWishReference(in.Source, in.ExternalID, in.Type)
 	if !ok {
-		fail(w, http.StatusBadRequest, "Enter a valid IMDb or TMDb ID or URL, or choose Manual")
+		fail(w, http.StatusBadRequest, "Enter a valid IMDb, TMDb or TVDB ID or URL, or choose Manual")
 		return
 	}
 	if in.Source == "manual" && in.ExternalID != "" {
@@ -626,14 +594,52 @@ func (a *App) updateWish(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "Status must be approved or rejected")
 		return
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	next := append([]Wish(nil), a.wishes...)
+	// Serialize approvals with syncs and other reviews so a request is sent to
+	// Sonarr/Radarr at most once when two admin tabs act concurrently.
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	a.mu.RLock()
+	var requested Wish
 	found := false
+	for _, candidate := range a.wishes {
+		if candidate.ID == r.PathValue("id") {
+			requested, found = candidate, true
+			break
+		}
+	}
+	a.mu.RUnlock()
+	if !found {
+		fail(w, http.StatusNotFound, "Request not found")
+		return
+	}
+	if requested.Status == "available" {
+		fail(w, http.StatusConflict, "This title is already available")
+		return
+	}
+	if requested.Status != "pending" {
+		fail(w, http.StatusConflict, "This request has already been reviewed")
+		return
+	}
+	if in.Status == "approved" {
+		if err := a.dispatchWish(r.Context(), requested); err != nil {
+			log.Printf("vloader: %s for request %s: %v", err, requested.ID, err)
+			fail(w, http.StatusBadGateway, "Could not send the request to Sonarr or Radarr; check the automation settings and logs")
+			return
+		}
+	}
+	a.mu.Lock()
+	next := append([]Wish(nil), a.wishes...)
+	found = false
 	for i := range next {
 		if next[i].ID == r.PathValue("id") {
 			if next[i].Status == "available" {
+				a.mu.Unlock()
 				fail(w, http.StatusConflict, "This title is already available")
+				return
+			}
+			if next[i].Status != "pending" {
+				a.mu.Unlock()
+				fail(w, http.StatusConflict, "This request has already been reviewed")
 				return
 			}
 			next[i].Status = in.Status
@@ -643,14 +649,17 @@ func (a *App) updateWish(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !found {
+		a.mu.Unlock()
 		fail(w, http.StatusNotFound, "Request not found")
 		return
 	}
 	if err := persist(a.data+"/wishes.json", next); err != nil {
+		a.mu.Unlock()
 		fail(w, http.StatusInternalServerError, "Could not update the request")
 		return
 	}
 	a.wishes = next
+	a.mu.Unlock()
 	jsonOut(w, map[string]bool{"ok": true})
 }
 
@@ -658,7 +667,7 @@ func normalizeWishReference(source, value, mediaType string) (string, string, bo
 	if source == "manual" {
 		return "", "", value == ""
 	}
-	if source != "imdb" && source != "tmdb" {
+	if source != "imdb" && source != "tmdb" && source != "tvdb" {
 		return "", "", false
 	}
 	if strings.Contains(value, "://") {
@@ -673,7 +682,7 @@ func normalizeWishReference(source, value, mediaType string) (string, string, bo
 				return "", "", false
 			}
 			value = parts[1]
-		} else {
+		} else if source == "tmdb" {
 			if host != "themoviedb.org" && !strings.HasSuffix(host, ".themoviedb.org") {
 				return "", "", false
 			}
@@ -682,6 +691,11 @@ func normalizeWishReference(source, value, mediaType string) (string, string, bo
 				want = "tv"
 			}
 			if len(parts) < 2 || parts[0] != want {
+				return "", "", false
+			}
+			value = parts[1]
+		} else {
+			if (host != "thetvdb.com" && !strings.HasSuffix(host, ".thetvdb.com")) || mediaType != "Series" || len(parts) < 2 || parts[0] != "series" {
 				return "", "", false
 			}
 			value = parts[1]
@@ -696,6 +710,9 @@ func normalizeWishReference(source, value, mediaType string) (string, string, bo
 			kind = "tv"
 		}
 		return value, fmt.Sprintf("https://www.themoviedb.org/%s/%s", kind, value), true
+	}
+	if source == "tvdb" && mediaType == "Series" && tvdbIDPattern.MatchString(value) {
+		return value, "", true
 	}
 	return "", "", false
 }
@@ -718,6 +735,8 @@ func wishMatches(wish Wish, item Item) bool {
 		provider := "Imdb"
 		if wish.Source == "tmdb" {
 			provider = "Tmdb"
+		} else if wish.Source == "tvdb" {
+			provider = "Tvdb"
 		}
 		for key, id := range item.ProviderIDs {
 			if strings.EqualFold(key, provider) && strings.EqualFold(id, wish.ExternalID) {

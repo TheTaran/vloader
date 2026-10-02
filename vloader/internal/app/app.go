@@ -55,9 +55,10 @@ type Config struct {
 	SMTPUsername        string
 	SMTPPassword        string
 	SMTPFrom            string
-	TMDBAPIKey          string
-	TVDBAPIKey          string
-	TVDBPIN             string
+	RadarrURL           string
+	RadarrAPIKey        string
+	SonarrURL           string
+	SonarrAPIKey        string
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
@@ -154,10 +155,6 @@ type App struct {
 	wishes                  []Wish
 	wishMetadata            map[string]wishMetadataCache
 	availabilityEmailQueued map[string]bool
-	tvdbToken               string
-	tvdbExpires             time.Time
-	tvdbKey                 string
-	tvdbPIN                 string
 	notifications           chan Wish
 	sessions                map[string]session
 	roles                   map[string]string
@@ -211,6 +208,9 @@ func New() (*App, error) {
 	}
 	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS"), OIDCAdminSubjects: os.Getenv("OIDC_ADMIN_SUBJECTS"), OIDCGroupsClaim: env("OIDC_GROUPS_CLAIM", "groups"), OIDCAllowedGroups: os.Getenv("OIDC_ALLOWED_GROUPS"), OIDCAdminGroups: os.Getenv("OIDC_ADMIN_GROUPS")}
 	if e := loadState(a.data+"/settings.json", &a.cfg); e != nil {
+		return nil, e
+	}
+	if e := removeLegacySettings(a.data+"/settings.json", a.cfg); e != nil {
 		return nil, e
 	}
 	if a.cfg.SyncIntervalMinutes <= 0 {
@@ -390,6 +390,7 @@ func (a *App) Handler() http.Handler {
 		jsonOut(w, a.catalog)
 	})))
 	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
+	m.Handle("GET /api/wishes/search", a.guard(http.HandlerFunc(a.searchWishes)))
 	m.Handle("POST /api/wishes", a.guard(http.HandlerFunc(a.createWish)))
 	m.Handle("GET /api/wishes/{id}/metadata", a.guard(http.HandlerFunc(a.getWishMetadata)))
 	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))
@@ -397,7 +398,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
 	m.Handle("POST /api/settings/dashboard", a.adminGuard(http.HandlerFunc(a.saveDashboardSettings)))
 	m.Handle("POST /api/settings/notifications", a.adminGuard(http.HandlerFunc(a.saveNotificationSettings)))
-	m.Handle("POST /api/settings/metadata", a.adminGuard(http.HandlerFunc(a.saveMetadataSettings)))
+	m.Handle("POST /api/settings/automation", a.adminGuard(http.HandlerFunc(a.saveAutomationSettings)))
 	m.Handle("POST /api/settings/notifications/test", a.adminGuard(http.HandlerFunc(a.testNotificationSettings)))
 	m.Handle("POST /api/sync", a.adminGuard(http.HandlerFunc(a.syncCatalog)))
 	m.Handle("GET /api/images/{id}/{kind}", a.guard(http.HandlerFunc(a.image)))
@@ -781,7 +782,66 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if claim == "" {
 		claim = "groups"
 	}
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasTMDBAPIKey": c.TMDBAPIKey != "", "HasTVDBAPIKey": c.TVDBAPIKey != "", "HasTVDBPIN": c.TVDBPIN != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "RadarrURL": c.RadarrURL, "HasRadarrAPIKey": c.RadarrAPIKey != "", "SonarrURL": c.SonarrURL, "HasSonarrAPIKey": c.SonarrAPIKey != ""})
+}
+
+func validateArrURL(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Scheme == "http" || u.Scheme == "https") && len(raw) <= 2048
+}
+
+func validArrKey(value string) bool {
+	return len(value) <= 512 && !strings.ContainsAny(value, "\r\n \t")
+}
+
+func (a *App) saveAutomationSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		RadarrURL        string `json:"RadarrURL"`
+		RadarrAPIKey     string `json:"RadarrAPIKey"`
+		RadarrRootFolder string `json:"RadarrRootFolder"`
+		RadarrQualityID  int    `json:"RadarrQualityID"`
+		SonarrURL        string `json:"SonarrURL"`
+		SonarrAPIKey     string `json:"SonarrAPIKey"`
+		SonarrRootFolder string `json:"SonarrRootFolder"`
+		SonarrQualityID  int    `json:"SonarrQualityID"`
+		SonarrLanguageID int    `json:"SonarrLanguageID"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	in.RadarrURL, in.RadarrAPIKey = strings.TrimSpace(in.RadarrURL), strings.TrimSpace(in.RadarrAPIKey)
+	in.SonarrURL, in.SonarrAPIKey = strings.TrimSpace(in.SonarrURL), strings.TrimSpace(in.SonarrAPIKey)
+	old := a.config()
+	if !validateArrURL(in.RadarrURL) || !validateArrURL(in.SonarrURL) || !validArrKey(in.RadarrAPIKey) || !validArrKey(in.SonarrAPIKey) {
+		fail(w, http.StatusBadRequest, "Enter valid Radarr and Sonarr URLs and API keys")
+		return
+	}
+	if in.RadarrURL != "" && in.RadarrURL == old.RadarrURL && in.RadarrAPIKey == "" {
+		in.RadarrAPIKey = old.RadarrAPIKey
+	}
+	if in.SonarrURL != "" && in.SonarrURL == old.SonarrURL && in.SonarrAPIKey == "" {
+		in.SonarrAPIKey = old.SonarrAPIKey
+	}
+	if in.RadarrURL != "" && in.RadarrAPIKey == "" || in.SonarrURL != "" && in.SonarrAPIKey == "" {
+		fail(w, http.StatusBadRequest, "An API key is required when Radarr or Sonarr is enabled")
+		return
+	}
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	c := old
+	c.RadarrURL, c.RadarrAPIKey = in.RadarrURL, in.RadarrAPIKey
+	c.SonarrURL, c.SonarrAPIKey = in.SonarrURL, in.SonarrAPIKey
+	if err := persist(a.data+"/settings.json", c); err != nil {
+		fail(w, http.StatusInternalServerError, "Failed to save automation settings")
+		return
+	}
+	a.mu.Lock()
+	a.cfg = c
+	a.mu.Unlock()
+	jsonOut(w, map[string]bool{"ok": true})
 }
 
 func (a *App) saveDashboardSettings(w http.ResponseWriter, r *http.Request) {
@@ -805,51 +865,6 @@ func (a *App) saveDashboardSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	a.cfg = c
-	a.mu.Unlock()
-	jsonOut(w, map[string]bool{"ok": true})
-}
-
-func (a *App) saveMetadataSettings(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		TMDBAPIKey string `json:"TMDBAPIKey"`
-		TVDBAPIKey string `json:"TVDBAPIKey"`
-		TVDBPIN    string `json:"TVDBPIN"`
-	}
-	if !decode(w, r, &in) {
-		return
-	}
-	in.TMDBAPIKey = strings.TrimSpace(in.TMDBAPIKey)
-	if len(in.TMDBAPIKey) > 512 || strings.ContainsAny(in.TMDBAPIKey, "\r\n \t") {
-		fail(w, http.StatusBadRequest, "Enter a valid TMDb API Read Access Token")
-		return
-	}
-	in.TVDBAPIKey = strings.TrimSpace(in.TVDBAPIKey)
-	in.TVDBPIN = strings.TrimSpace(in.TVDBPIN)
-	if len(in.TVDBAPIKey) > 512 || strings.ContainsAny(in.TVDBAPIKey, "\r\n \t") || len(in.TVDBPIN) > 512 || strings.ContainsAny(in.TVDBPIN, "\r\n \t") {
-		fail(w, http.StatusBadRequest, "Enter a valid TVDB API key and subscriber PIN")
-		return
-	}
-	a.syncMu.Lock()
-	defer a.syncMu.Unlock()
-	c := a.config()
-	if in.TMDBAPIKey != "" {
-		c.TMDBAPIKey = in.TMDBAPIKey
-	}
-	if in.TVDBAPIKey != "" {
-		c.TVDBAPIKey = in.TVDBAPIKey
-	}
-	if in.TVDBPIN != "" {
-		c.TVDBPIN = in.TVDBPIN
-	}
-	if err := persist(a.data+"/settings.json", c); err != nil {
-		fail(w, http.StatusInternalServerError, "Failed to save metadata settings")
-		return
-	}
-	a.mu.Lock()
-	a.cfg = c
-	a.wishMetadata = map[string]wishMetadataCache{}
-	a.tvdbToken, a.tvdbKey, a.tvdbPIN = "", "", ""
-	a.tvdbExpires = time.Time{}
 	a.mu.Unlock()
 	jsonOut(w, map[string]bool{"ok": true})
 }
@@ -947,6 +962,29 @@ func loadState(file string, dst any) error {
 	}
 	return nil
 }
+
+func removeLegacySettings(file string, cfg Config) error {
+	b, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read persisted state file %s for migration: %w", path.Base(file), err)
+	}
+	var stored map[string]json.RawMessage
+	if err := json.Unmarshal(b, &stored); err != nil {
+		return fmt.Errorf("decode persisted state file %s for migration: %w", path.Base(file), err)
+	}
+	legacy := []string{"RadarrRootFolder", "RadarrQualityID", "SonarrRootFolder", "SonarrQualityID", "SonarrLanguageID", "TMDBAPIKey", "TVDBAPIKey", "TVDBPIN"}
+	for _, key := range legacy {
+		if _, exists := stored[key]; exists {
+			log.Printf("vloader: removing obsolete setting %s", key)
+			return persist(file, cfg)
+		}
+	}
+	return nil
+}
+
 func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	var c Config
 	if !decode(w, r, &c) {
@@ -988,8 +1026,8 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	// saves from the connection and authentication forms.
 	c.AdminEmail, c.SMTPHost, c.SMTPPort, c.SMTPDisableTLS = old.AdminEmail, old.SMTPHost, old.SMTPPort, old.SMTPDisableTLS
 	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = old.SMTPUsername, old.SMTPPassword, old.SMTPFrom
-	c.TMDBAPIKey = old.TMDBAPIKey
-	c.TVDBAPIKey, c.TVDBPIN = old.TVDBAPIKey, old.TVDBPIN
+	c.RadarrURL, c.RadarrAPIKey = old.RadarrURL, old.RadarrAPIKey
+	c.SonarrURL, c.SonarrAPIKey = old.SonarrURL, old.SonarrAPIKey
 	if !c.UpdateOIDC && c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
 			fail(w, 400, "Enter the API key again when switching servers")
@@ -1096,7 +1134,7 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 				Items            []Item
 				TotalRecordCount int
 			}
-			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
+			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "SortBy": {"DateCreated"}, "SortOrder": {"Descending"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
 			if e := a.fetch(r.Context(), c, "/Items?"+q.Encode(), &page); e != nil {
 				fail(w, 502, e.Error())
 				return

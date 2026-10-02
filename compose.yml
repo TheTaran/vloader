@@ -1,6 +1,7 @@
 name: vloader
 services:
   vloader:
+    container_name: vloaderdev
     build:
       context: ./vloader
       # Keep this in sync with the release tag when validating locally.

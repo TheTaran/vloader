@@ -273,6 +273,9 @@ func TestEmbySyncPaginationAtomicityAndDownloads(t *testing.T) {
 			if !strings.Contains(r.URL.Query().Get("Fields"), "DateCreated") {
 				t.Error("sync did not request Emby DateCreated for latest updates")
 			}
+			if r.URL.Query().Get("SortBy") != "DateCreated" || r.URL.Query().Get("SortOrder") != "Descending" {
+				t.Errorf("sync did not request Emby latest ordering: SortBy=%q SortOrder=%q", r.URL.Query().Get("SortBy"), r.URL.Query().Get("SortOrder"))
+			}
 			if broken {
 				w.WriteHeader(503)
 				return

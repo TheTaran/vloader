@@ -1,5 +1,13 @@
 ## Unreleased
 
+## v0.1.15
+- Add optional Radarr/Sonarr request automation and user-facing title search. Selecting a result creates a pending vloader request; only an administrator approval submits it using the first root folder and profiles returned by the service, while failed or unconfigured integrations leave it pending.
+- Use Radarr and Sonarr exclusively for the user request search and request details; remove manual provider entry and TMDb API lookups from the request interface.
+- Remove TVDB request artwork, credentials, settings access and attribution from the active application; Radarr and Sonarr now provide all pre-Emby request details.
+- Remove obsolete TMDb/TVDB credentials and Radarr/Sonarr root/profile selections from existing settings files during startup.
+- Use Emby's `DateCreated` descending order for every library and for the latest dashboard instead of sorting library cards by production year.
+- Allow administrators to open the request search and submit test requests while keeping the complete user-request list above the form.
+
 ## v0.1.14
 - Make All content a latest-updates dashboard for movies and series, newest first; configure its 1–365 day window in Settings (default 14 days).
 - Email requesters when an Emby sync first finds their movie or series; use a verified OIDC email claim and prevent duplicate notices on later syncs.

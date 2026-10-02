@@ -152,8 +152,8 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	if updated := request(a, http.MethodPost, "/api/wishes/"+wish.ID, body, a.origin, "user-session"); updated.Code != http.StatusForbidden {
 		t.Fatalf("non-admin changed request: %d", updated.Code)
 	}
-	if updated := request(a, http.MethodPost, "/api/wishes/"+wish.ID, body, a.origin, "admin-session"); updated.Code != http.StatusOK {
-		t.Fatalf("admin review failed: %d %s", updated.Code, updated.Body.String())
+	if updated := request(a, http.MethodPost, "/api/wishes/"+wish.ID, body, a.origin, "admin-session"); updated.Code != http.StatusBadGateway {
+		t.Fatalf("unconfigured automation did not fail safely: %d %s", updated.Code, updated.Body.String())
 	}
 	duplicate := request(a, http.MethodPost, "/api/wishes", `{"title":"A New Film!","type":"Movie","source":"manual"}`, a.origin, "user-session")
 	if duplicate.Code != http.StatusConflict {
@@ -247,22 +247,22 @@ func TestRequesterEmailIsRedactedFromNotificationErrors(t *testing.T) {
 	}
 }
 
-func TestSaveMetadataSettingsIsAdminOnlyAndSecretIsRedacted(t *testing.T) {
+func TestLegacyMetadataSettingsEndpointIsRemoved(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
 	sessionRoles.Store("user-session", "user")
 	t.Cleanup(func() { sessionRoles.Delete("user-session") })
 	body := `{"TMDBAPIKey":"private-read-token","TVDBAPIKey":"private-tvdb-key","TVDBPIN":"private-pin"}`
-	if got := request(a, http.MethodPost, "/api/settings/metadata", body, a.origin, "user-session"); got.Code != http.StatusForbidden {
-		t.Fatalf("regular user changed metadata settings: %d", got.Code)
+	if got := request(a, http.MethodPost, "/api/settings/metadata", body, a.origin, "user-session"); got.Code != http.StatusNotFound {
+		t.Fatalf("legacy metadata endpoint is still routed for a user: %d", got.Code)
 	}
-	if got := request(a, http.MethodPost, "/api/settings/metadata", body, a.origin, "admin-session"); got.Code != http.StatusOK {
-		t.Fatalf("admin could not save metadata settings: %d %s", got.Code, got.Body.String())
+	if got := request(a, http.MethodPost, "/api/settings/metadata", body, a.origin, "admin-session"); got.Code != http.StatusNotFound {
+		t.Fatalf("legacy metadata endpoint is still active: %d %s", got.Code, got.Body.String())
 	}
 	settings := request(a, http.MethodGet, "/api/settings", "", "", "admin-session")
-	if !strings.Contains(settings.Body.String(), `"HasTMDBAPIKey":true`) || !strings.Contains(settings.Body.String(), `"HasTVDBAPIKey":true`) || !strings.Contains(settings.Body.String(), `"HasTVDBPIN":true`) || strings.Contains(settings.Body.String(), "private-read-token") || strings.Contains(settings.Body.String(), "private-tvdb-key") || strings.Contains(settings.Body.String(), "private-pin") {
-		t.Fatal("metadata settings did not persist safely or exposed the API token")
+	if strings.Contains(settings.Body.String(), "TMDB") || strings.Contains(settings.Body.String(), "TVDB") || strings.Contains(settings.Body.String(), "private-read-token") || strings.Contains(settings.Body.String(), "private-tvdb-key") || strings.Contains(settings.Body.String(), "private-pin") {
+		t.Fatal("legacy metadata settings remain exposed")
 	}
 }
 
@@ -285,6 +285,9 @@ func TestWishMatchingUsesProviderIDAndMediaType(t *testing.T) {
 		if _, _, ok := normalizeWishReference(source, value, "Movie"); !ok {
 			t.Errorf("valid %s reference rejected", source)
 		}
+	}
+	if ref, sourceURL, ok := normalizeWishReference("tvdb", "66", "Series"); !ok || ref != "66" || sourceURL != "" {
+		t.Fatalf("valid TVDB series reference rejected: ref=%q url=%q ok=%v", ref, sourceURL, ok)
 	}
 	if _, _, ok := normalizeWishReference("imdb", "tt1234567\r\nBcc: bad@example.com", "Movie"); ok {
 		t.Fatal("invalid reference accepted")
