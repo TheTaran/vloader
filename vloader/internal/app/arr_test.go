@@ -218,9 +218,9 @@ func TestUserSearchesRadarrAndSonarrWithoutAddingTitles(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/api/v3/movie/lookup":
-			json.NewEncoder(w).Encode([]arrMovieLookup{{Title: "Wanted Movie", TMDBID: 123, Year: 2026, Overview: "Movie overview"}})
+			json.NewEncoder(w).Encode([]arrMovieLookup{{Title: "Wanted Movie", TMDBID: 123, Year: 2026, Overview: "Movie overview", Images: []arrImage{{CoverType: "poster", RemoteURL: "https://image.tmdb.org/t/p/original/poster.jpg"}, {CoverType: "fanart", RemoteURL: "https://image.tmdb.org/t/p/original/banner.jpg"}}}})
 		case "/api/v3/series/lookup":
-			json.NewEncoder(w).Encode([]arrSeriesLookup{{Title: "Wanted Series", TVDBID: 456, Year: 2025, Overview: "Series overview"}})
+			json.NewEncoder(w).Encode([]arrSeriesLookup{{Title: "Wanted Series", TVDBID: 456, Year: 2025, Overview: "Series overview", Images: []arrImage{{CoverType: "banner", RemoteURL: "https://artworks.thetvdb.com/banners/series.jpg"}}}})
 		default:
 			t.Fatalf("unexpected search path %s", r.URL.Path)
 		}
@@ -233,15 +233,30 @@ func TestUserSearchesRadarrAndSonarrWithoutAddingTitles(t *testing.T) {
 	a.cfg.SonarrURL, a.cfg.SonarrAPIKey = server.URL, "sonarr-secret"
 
 	movie := request(a, http.MethodGet, "/api/wishes/search?type=Movie&q=Wanted", "", "", "user-session")
-	if movie.Code != http.StatusOK || !strings.Contains(movie.Body.String(), `"source":"tmdb"`) || !strings.Contains(movie.Body.String(), `"externalId":"123"`) {
+	if movie.Code != http.StatusOK || !strings.Contains(movie.Body.String(), `"source":"tmdb"`) || !strings.Contains(movie.Body.String(), `"externalId":"123"`) || !strings.Contains(movie.Body.String(), `image.tmdb.org`) || !strings.Contains(movie.Body.String(), `poster.jpg`) {
 		t.Fatalf("unexpected Radarr search response: %d %s", movie.Code, movie.Body.String())
 	}
 	series := request(a, http.MethodGet, "/api/wishes/search?type=Series&q=Wanted", "", "", "user-session")
-	if series.Code != http.StatusOK || !strings.Contains(series.Body.String(), `"source":"tvdb"`) || !strings.Contains(series.Body.String(), `"externalId":"456"`) {
+	if series.Code != http.StatusOK || !strings.Contains(series.Body.String(), `"source":"tvdb"`) || !strings.Contains(series.Body.String(), `"externalId":"456"`) || !strings.Contains(series.Body.String(), `artworks.thetvdb.com`) {
 		t.Fatalf("unexpected Sonarr search response: %d %s", series.Code, series.Body.String())
 	}
 	if posts != 0 || len(a.wishes) != 0 {
 		t.Fatalf("search added a title before approval: posts=%d wishes=%d", posts, len(a.wishes))
+	}
+}
+
+func TestSelectArrPosterPrefersPosterAndRejectsUntrustedHosts(t *testing.T) {
+	images := []arrImage{
+		{CoverType: "banner", RemoteURL: "https://evil.example/banner.jpg"},
+		{CoverType: "fanart", RemoteURL: "https://image.tmdb.org/t/p/original/fanart.jpg"},
+		{CoverType: "poster", RemoteURL: "https://image.tmdb.org/t/p/original/poster.jpg"},
+	}
+	got := selectArrPoster(images)
+	if !strings.HasPrefix(got, "/api/request-image?url=") || !strings.Contains(got, "poster.jpg") {
+		t.Fatalf("safe poster was not selected: %q", got)
+	}
+	if safeArrImageURL("http://image.tmdb.org/t/p/original/poster.jpg") != "" || safeArrImageURL("https://evil.example/banner.jpg") != "" {
+		t.Fatal("unsafe request image URL accepted")
 	}
 }
 

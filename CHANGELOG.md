@@ -1,5 +1,8 @@
 ## Unreleased
 
+## v0.2
+- Show complete movie and series posters in request search results, proxied through authenticated vloader endpoints with a strict image-host allowlist.
+
 ## v0.1.15
 - Add optional Radarr/Sonarr request automation and user-facing title search. Selecting a result creates a pending vloader request; only an administrator approval submits it using the first root folder and profiles returned by the service, while failed or unconfigured integrations leave it pending.
 - Use Radarr and Sonarr exclusively for the user request search and request details; remove manual provider entry and TMDb API lookups from the request interface.

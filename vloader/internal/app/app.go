@@ -391,6 +391,7 @@ func (a *App) Handler() http.Handler {
 	})))
 	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
 	m.Handle("GET /api/wishes/search", a.guard(http.HandlerFunc(a.searchWishes)))
+	m.Handle("GET /api/request-image", a.guard(http.HandlerFunc(a.requestImage)))
 	m.Handle("POST /api/wishes", a.guard(http.HandlerFunc(a.createWish)))
 	m.Handle("GET /api/wishes/{id}/metadata", a.guard(http.HandlerFunc(a.getWishMetadata)))
 	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))

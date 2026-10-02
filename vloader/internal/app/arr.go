@@ -14,23 +14,30 @@ import (
 )
 
 type arrMovieLookup struct {
-	Title     string   `json:"title"`
-	TMDBID    int      `json:"tmdbId"`
-	IMDBID    string   `json:"imdbId"`
-	Year      int      `json:"year"`
-	Overview  string   `json:"overview"`
-	Genres    []string `json:"genres"`
-	InCinemas string   `json:"inCinemas"`
+	Title     string     `json:"title"`
+	TMDBID    int        `json:"tmdbId"`
+	IMDBID    string     `json:"imdbId"`
+	Year      int        `json:"year"`
+	Overview  string     `json:"overview"`
+	Genres    []string   `json:"genres"`
+	InCinemas string     `json:"inCinemas"`
+	Images    []arrImage `json:"images"`
 }
 
 type arrSeriesLookup struct {
-	Title      string   `json:"title"`
-	TVDBID     int      `json:"tvdbId"`
-	IMDBID     string   `json:"imdbId"`
-	Year       int      `json:"year"`
-	Overview   string   `json:"overview"`
-	Genres     []string `json:"genres"`
-	FirstAired string   `json:"firstAired"`
+	Title      string     `json:"title"`
+	TVDBID     int        `json:"tvdbId"`
+	IMDBID     string     `json:"imdbId"`
+	Year       int        `json:"year"`
+	Overview   string     `json:"overview"`
+	Genres     []string   `json:"genres"`
+	FirstAired string     `json:"firstAired"`
+	Images     []arrImage `json:"images"`
+}
+
+type arrImage struct {
+	CoverType string `json:"coverType"`
+	RemoteURL string `json:"remoteUrl"`
 }
 
 type arrSearchResult struct {
@@ -40,6 +47,7 @@ type arrSearchResult struct {
 	Overview   string `json:"overview,omitempty"`
 	Source     string `json:"source"`
 	ExternalID string `json:"externalId"`
+	ImageURL   string `json:"imageUrl,omitempty"`
 }
 
 type arrRootFolder struct {
@@ -63,6 +71,31 @@ func boundedSearchText(value string, limit int) string {
 		return string(runes[:limit]) + "…"
 	}
 	return value
+}
+
+func safeArrImageURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	if host != "image.tmdb.org" && host != "artworks.thetvdb.com" {
+		return ""
+	}
+	return u.String()
+}
+
+func selectArrPoster(images []arrImage) string {
+	for _, kind := range []string{"poster", "banner", "fanart"} {
+		for _, image := range images {
+			if strings.EqualFold(image.CoverType, kind) {
+				if safe := safeArrImageURL(image.RemoteURL); safe != "" {
+					return "/api/request-image?url=" + url.QueryEscape(safe)
+				}
+			}
+		}
+	}
+	return ""
 }
 
 func arrEndpoint(base, endpoint string) string {
@@ -166,7 +199,7 @@ func (a *App) searchWishes(w http.ResponseWriter, r *http.Request) {
 			if match.TMDBID < 1 || title == "" || len([]rune(title)) > 180 {
 				continue
 			}
-			results = append(results, arrSearchResult{Title: title, Type: "Movie", Year: match.Year, Overview: boundedSearchText(match.Overview, 500), Source: "tmdb", ExternalID: fmt.Sprint(match.TMDBID)})
+			results = append(results, arrSearchResult{Title: title, Type: "Movie", Year: match.Year, Overview: boundedSearchText(match.Overview, 500), Source: "tmdb", ExternalID: fmt.Sprint(match.TMDBID), ImageURL: selectArrPoster(match.Images)})
 			if len(results) == 20 {
 				break
 			}
@@ -187,13 +220,47 @@ func (a *App) searchWishes(w http.ResponseWriter, r *http.Request) {
 			if match.TVDBID < 1 || title == "" || len([]rune(title)) > 180 {
 				continue
 			}
-			results = append(results, arrSearchResult{Title: title, Type: "Series", Year: match.Year, Overview: boundedSearchText(match.Overview, 500), Source: "tvdb", ExternalID: fmt.Sprint(match.TVDBID)})
+			results = append(results, arrSearchResult{Title: title, Type: "Series", Year: match.Year, Overview: boundedSearchText(match.Overview, 500), Source: "tvdb", ExternalID: fmt.Sprint(match.TVDBID), ImageURL: selectArrPoster(match.Images)})
 			if len(results) == 20 {
 				break
 			}
 		}
 	}
 	jsonOut(w, map[string]any{"items": results})
+}
+
+func (a *App) requestImage(w http.ResponseWriter, r *http.Request) {
+	remote := safeArrImageURL(r.URL.Query().Get("url"))
+	if remote == "" {
+		fail(w, http.StatusBadRequest, "Invalid request image")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remote, nil)
+	if err != nil {
+		fail(w, http.StatusBadRequest, "Invalid request image")
+		return
+	}
+	client := *a.client
+	client.Timeout = 15 * time.Second
+	res, err := client.Do(req)
+	if err != nil || res.StatusCode != http.StatusOK {
+		if res != nil {
+			res.Body.Close()
+		}
+		fail(w, http.StatusBadGateway, "Request image unavailable")
+		return
+	}
+	defer res.Body.Close()
+	contentType := res.Header.Get("Content-Type")
+	if !strings.HasPrefix(strings.ToLower(contentType), "image/") {
+		fail(w, http.StatusBadGateway, "Invalid request image response")
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	_, _ = io.Copy(w, io.LimitReader(res.Body, 10<<20))
 }
 
 func (a *App) dispatchWish(ctx context.Context, wish Wish) error {
