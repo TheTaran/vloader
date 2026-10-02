@@ -267,6 +267,16 @@ func TestLegacyMetadataSettingsEndpointIsRemoved(t *testing.T) {
 }
 
 func TestWishMatchingUsesProviderIDAndMediaType(t *testing.T) {
+	providerWish := Wish{Title: "Dark", Type: "Series", Source: "tvdb", ExternalID: "334824"}
+	if !wishMatches(providerWish, Item{Type: "Series", Name: "dark"}) {
+		t.Fatal("exact title fallback failed when Emby omitted the requested provider")
+	}
+	if wishMatches(providerWish, Item{Type: "Series", Name: "Dark", ProviderIDs: map[string]string{"Tvdb": "999"}}) {
+		t.Fatal("title fallback overrode a conflicting provider ID")
+	}
+	if wishMatches(providerWish, Item{Type: "Movie", Name: "Dark"}) || wishMatches(providerWish, Item{Type: "Series", Name: "Dark Matter"}) {
+		t.Fatal("title fallback matched a different type or partial title")
+	}
 	imdbWish := Wish{Title: "Movie", Type: "Movie", Source: "imdb", ExternalID: "tt1234567"}
 	if !wishMatches(imdbWish, Item{Type: "Movie", ProviderIDs: map[string]string{"Imdb": "tt1234567"}}) {
 		t.Fatal("IMDb provider ID did not match")

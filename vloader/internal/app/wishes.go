@@ -739,11 +739,10 @@ func wishMatches(wish Wish, item Item) bool {
 			provider = "Tvdb"
 		}
 		for key, id := range item.ProviderIDs {
-			if strings.EqualFold(key, provider) && strings.EqualFold(id, wish.ExternalID) {
-				return true
+			if strings.EqualFold(key, provider) && strings.TrimSpace(id) != "" {
+				return strings.EqualFold(id, wish.ExternalID)
 			}
 		}
-		return false
 	}
 	return normalizedTitle(wish.Title) != "" && normalizedTitle(wish.Title) == normalizedTitle(item.Name)
 }

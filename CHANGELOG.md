@@ -1,5 +1,8 @@
 ## Unreleased
 
+## v0.2.1
+- Refresh requests immediately after library sync and match exact titles when Emby omits the requested provider ID, while rejecting conflicting IDs.
+
 ## v0.2
 - Show complete movie and series posters in request search results, proxied through authenticated vloader endpoints with a strict image-host allowlist.
 
