@@ -1,5 +1,17 @@
 # Release validation
 
+## v0.2.3
+
+Reviewed implementation commit: `9d2d9f7` (`docs: prepare v0.2.3 release`), based on `v0.2.2`. This is an author self-review, not an independent review. The review covered the complete English README rewrite, Quick Start accuracy, current mobile-navigation and external-sync documentation, Compose/environment references, and internal Markdown links. No critical or high-severity findings were identified.
+
+Validation completed:
+
+- `git diff --check` completed successfully.
+- Verified referenced Compose, environment, security, changelog, and testing-strategy files exist.
+- `docker compose config --quiet` completed successfully; the development container is healthy and `/healthz` returned `{"status":"ok"}`.
+
+This release changes documentation only. No application code, Docker image, or external integration behavior was changed, and no production deployment was performed.
+
 ## v0.2.2
 
 Reviewed implementation commit: `844d913` (`feat: add external sync and mobile library access`), based on `v0.2.1`. This is an author self-review, not an independent review. The review covered the external sync API authentication and secret persistence, the sole Origin-check exemption, administrator-only root-folder selection, configured Arr target boundaries, request artwork proxying, catalog snapshot preservation, reduced browser catalog responses, and mobile navigation and control structure. No critical or high-severity findings were identified.
