@@ -1,0 +1,40 @@
+name: vloader
+
+services:
+  vloader:
+    image: ghcr.io/thetaran/vloader:${VLOADER_VERSION:-0.2}
+    container_name: vloader
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
+      DATA_DIR: /data
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"
+    volumes:
+      # Create this directory and assign it to UID/GID 10001 before starting.
+      # vloader stores settings, catalog snapshots, and requests directly in /data.
+      - ${VLOADER_DATA_DIR:-./data}:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 512m
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://127.0.0.1:8080/healthz]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+
+    # Optional network source: copy ONE configuration from compose-template.yml
+    # into this service when direct NFS or SMB downloads are required. /data must
+    # remain separate from /media. The default Emby API download mode needs none.

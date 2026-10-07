@@ -61,6 +61,23 @@ http://localhost:8090
 
 Sign in as `admin` with the password from `.env`. The default Compose template publishes only on loopback. For remote access, use HTTPS through a trusted reverse proxy and set `APP_URL` to that exact public origin.
 
+### Production image
+
+For a published image, use the production template:
+
+```bash
+cp compose-production-template.yml compose.yml
+cp .env.example .env
+```
+
+Set `VLOADER_VERSION` in `.env` to an image tag such as `0.2` for the current minor series or `0.2.3` to pin an exact release. Then create `./data` with UID/GID `10001` and run:
+
+```bash
+docker compose up -d
+```
+
+For direct NFS or SMB downloads, copy exactly one documented mount block from [compose-template.yml](compose-template.yml) into the production service before starting it.
+
 ## Web Interface
 
 ### Libraries and downloads
@@ -178,6 +195,7 @@ The Docker host needs NFS or CIFS kernel support. Do not mount the media source 
 | `ADMIN_PASSWORD` | required | Local administrator password; at least 16 characters when local auth is enabled |
 | `LOCAL_AUTH_ENABLED` | `true` | Enables local administrator sign-in |
 | `VLOADER_DATA_DIR` | `./data` | Host path mounted at `/data` |
+| `VLOADER_VERSION` | `0.2` in the production template | Published GHCR image tag; use an exact patch version to pin a release |
 | `APP_VERSION` | `dev` | Version shown in the web interface; set this to the installed release tag |
 | `OIDC_ISSUER` | empty | OIDC issuer URL |
 | `OIDC_CLIENT_ID` | empty | OIDC client ID |
@@ -199,6 +217,7 @@ Emby, download-source, email, request automation, external sync, and most OIDC s
 | --- | --- |
 | [compose.yml](compose.yml) | Active local deployment configuration |
 | [compose-template.yml](compose-template.yml) | Full Compose template, including NFS and SMB examples |
+| [compose-production-template.yml](compose-production-template.yml) | Production template using the published GHCR image |
 | [.env.example](.env.example) | Commented environment variable reference |
 | [SECURITY.md](SECURITY.md) | Security model and vulnerability reporting |
 | [CHANGELOG.md](CHANGELOG.md) | User-visible changes |
