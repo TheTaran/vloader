@@ -42,7 +42,7 @@ func TestDispatchWishToRadarr(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Movie", Type: "Movie", Source: "tmdb", ExternalID: "123"}); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Movie", Type: "Movie", Source: "tmdb", ExternalID: "123"}, "/media/movies"); err != nil {
 		t.Fatal(err)
 	}
 	if added["tmdbId"] != float64(123) || added["qualityProfileId"] != float64(4) || added["rootFolderPath"] != "/media/movies" {
@@ -84,7 +84,7 @@ func TestDispatchWishToSonarr(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.SonarrURL, a.cfg.SonarrAPIKey = server.URL, "sonarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Series", Type: "Series", Source: "imdb", ExternalID: "tt1234567"}); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Series", Type: "Series", Source: "imdb", ExternalID: "tt1234567"}, "/media/series"); err != nil {
 		t.Fatal(err)
 	}
 	if added["tvdbId"] != float64(456) || added["qualityProfileId"] != float64(2) || added["languageProfileId"] != float64(1) || added["rootFolderPath"] != "/media/series" {
@@ -96,12 +96,59 @@ func TestUpdateWishRequiresAutomationBeforeApproval(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	a.wishes = []Wish{{ID: "wish-1", Title: "Example", Type: "Movie", Status: "pending"}}
-	w := request(a, http.MethodPost, "/api/wishes/wish-1", `{"status":"approved"}`, a.origin, "admin-session")
+	w := request(a, http.MethodPost, "/api/wishes/wish-1", `{"status":"approved","rootFolderPath":"/media/movies"}`, a.origin, "admin-session")
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "automation settings") {
 		t.Fatalf("approval without Radarr should fail clearly: %d %s", w.Code, w.Body.String())
 	}
 	if a.wishes[0].Status != "pending" {
 		t.Fatalf("failed automation changed request status: %+v", a.wishes[0])
+	}
+}
+
+func TestAutomationRootsAreAdminOnlyAndComeFromServices(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v3/rootfolder" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		json.NewEncoder(w).Encode([]arrRootFolder{{Path: "/media/primary"}, {Path: "/media/archive"}})
+	}))
+	defer server.Close()
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
+	a.cfg.SonarrURL, a.cfg.SonarrAPIKey = server.URL, "sonarr-secret"
+	if got := request(a, http.MethodGet, "/api/settings/automation/roots", "", "", "user-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("regular user accessed root folders: %d", got.Code)
+	}
+	got := request(a, http.MethodGet, "/api/settings/automation/roots", "", "", "admin-session")
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"Movie":["/media/primary","/media/archive"]`) || !strings.Contains(got.Body.String(), `"Series":["/media/primary","/media/archive"]`) {
+		t.Fatalf("unexpected root folder response: %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestApprovalRejectsUnknownRootFolderBeforeAdding(t *testing.T) {
+	var posts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/v3/movie/lookup":
+			json.NewEncoder(w).Encode([]arrMovieLookup{{Title: "Example", TMDBID: 123}})
+		case "GET /api/v3/rootfolder":
+			json.NewEncoder(w).Encode([]arrRootFolder{{Path: "/media/movies"}})
+		case "POST /api/v3/movie":
+			posts++
+		default:
+			t.Fatalf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	a := testApp(t)
+	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
+	err := a.dispatchWish(t.Context(), Wish{Title: "Example", Type: "Movie", Source: "tmdb", ExternalID: "123"}, "/media/not-configured")
+	if err == nil || !strings.Contains(err.Error(), "valid Radarr root folder") || posts != 0 {
+		t.Fatalf("unknown root folder was not rejected safely: err=%v posts=%d", err, posts)
 	}
 }
 
@@ -170,7 +217,7 @@ func TestDispatchWishUsesFirstRadarrDefaults(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Movie", Type: "Movie", Source: "tmdb", ExternalID: "321"}); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Movie", Type: "Movie", Source: "tmdb", ExternalID: "321"}, "/radarr/movies"); err != nil {
 		t.Fatal(err)
 	}
 	if added["rootFolderPath"] != "/radarr/movies" || added["qualityProfileId"] != float64(7) {
@@ -200,7 +247,7 @@ func TestDispatchWishUsesFirstSonarrDefaults(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.SonarrURL, a.cfg.SonarrAPIKey = server.URL, "sonarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Series", Type: "Series", Source: "tvdb", ExternalID: "654"}); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Series", Type: "Series", Source: "tvdb", ExternalID: "654"}, "/sonarr/series"); err != nil {
 		t.Fatal(err)
 	}
 	if added["rootFolderPath"] != "/sonarr/series" || added["qualityProfileId"] != float64(8) || added["languageProfileId"] != float64(2) {
@@ -274,12 +321,12 @@ func TestRequestMetadataComesFromArrLookup(t *testing.T) {
 		if r.URL.Path != "/api/v3/movie/lookup" || r.URL.Query().Get("term") != "tmdb:123" {
 			t.Fatalf("unexpected metadata request %s?%s", r.URL.Path, r.URL.RawQuery)
 		}
-		json.NewEncoder(w).Encode([]arrMovieLookup{{Title: "Arr Movie", TMDBID: 123, Overview: "From Radarr", Genres: []string{"Drama"}, InCinemas: "2026-02-03"}})
+		json.NewEncoder(w).Encode([]arrMovieLookup{{Title: "Arr Movie", TMDBID: 123, Overview: "From Radarr", Genres: []string{"Drama"}, InCinemas: "2026-02-03", Images: []arrImage{{CoverType: "poster", RemoteURL: "https://image.tmdb.org/t/p/original/arr-movie.jpg"}}}})
 	}))
 	defer server.Close()
 	a := testApp(t)
 	metadata, err := a.fetchArrWishMetadata(t.Context(), Config{RadarrURL: server.URL, RadarrAPIKey: "secret"}, Wish{Title: "Arr Movie", Type: "Movie", Source: "tmdb", ExternalID: "123"})
-	if err != nil || metadata.Title != "Arr Movie" || metadata.Overview != "From Radarr" || metadata.ReleaseDate != "2026-02-03" || len(metadata.Genres) != 1 {
+	if err != nil || metadata.Title != "Arr Movie" || metadata.Overview != "From Radarr" || metadata.ReleaseDate != "2026-02-03" || len(metadata.Genres) != 1 || !strings.Contains(metadata.PosterURL, "arr-movie.jpg") {
 		t.Fatalf("unexpected Arr metadata: %+v err=%v", metadata, err)
 	}
 }
@@ -325,7 +372,7 @@ func TestSonarrSearchRequestIsDispatchedOnlyAfterAdminApproval(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &wish); err != nil {
 		t.Fatal(err)
 	}
-	approved := request(a, http.MethodPost, "/api/wishes/"+wish.ID, `{"status":"approved"}`, a.origin, "admin-session")
+	approved := request(a, http.MethodPost, "/api/wishes/"+wish.ID, `{"status":"approved","rootFolderPath":"/media/series"}`, a.origin, "admin-session")
 	if approved.Code != http.StatusOK || posts != 1 || a.wishes[0].Status != "approved" {
 		t.Fatalf("approval did not dispatch once: status=%d posts=%d wish=%+v body=%s", approved.Code, posts, a.wishes[0], approved.Body.String())
 	}

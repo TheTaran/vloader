@@ -91,6 +91,75 @@ func request(a *App, method, target, body, origin, cookie string) *httptest.Resp
 	a.Handler().ServeHTTP(w, r)
 	return w
 }
+
+func TestAdminCanManageExternalSyncAPIKey(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "user", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+	if got := request(a, http.MethodPost, "/api/settings/sync-key", `{}`, a.origin, "user-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("regular user created a sync key: %d %s", got.Code, got.Body.String())
+	}
+	created := request(a, http.MethodPost, "/api/settings/sync-key", `{}`, a.origin, "admin-session")
+	if created.Code != http.StatusOK {
+		t.Fatalf("create sync key: %d %s", created.Code, created.Body.String())
+	}
+	var result struct {
+		APIKey string `json:"apiKey"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &result); err != nil || len(result.APIKey) < 32 {
+		t.Fatalf("invalid generated key: %q, %v", result.APIKey, err)
+	}
+	settings := request(a, http.MethodGet, "/api/settings", "", "", "admin-session")
+	if !strings.Contains(settings.Body.String(), `"HasSyncAPIKey":true`) || strings.Contains(settings.Body.String(), result.APIKey) {
+		t.Fatalf("settings exposed or omitted key state: %s", settings.Body.String())
+	}
+	persisted, err := os.ReadFile(filepath.Join(a.data, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(persisted), result.APIKey) || !strings.Contains(string(persisted), syncAPIKeyHash(result.APIKey)) {
+		t.Fatal("raw sync API key was persisted or its hash is missing")
+	}
+	connection := `{"EmbyURL":"https://emby.example.test","APIKey":"emby-key","SourceMode":"emby","SourcePrefix":"/video","SyncEnabled":true,"SyncIntervalMinutes":60}`
+	if got := request(a, http.MethodPost, "/api/settings", connection, a.origin, "admin-session"); got.Code != http.StatusOK || a.cfg.SyncAPIKeyHash != syncAPIKeyHash(result.APIKey) {
+		t.Fatalf("connection save did not preserve sync key: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(a, http.MethodPost, "/api/settings/sync-key/revoke", `{}`, a.origin, "admin-session"); got.Code != http.StatusOK || a.cfg.SyncAPIKeyHash != "" {
+		t.Fatalf("revoke sync key: %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestExternalSyncRequiresKeyAndAcceptsWebhookWithoutOrigin(t *testing.T) {
+	emby := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/Library/MediaFolders" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"Items": []any{}})
+	}))
+	defer emby.Close()
+	a := testApp(t)
+	key := random()
+	a.cfg.EmbyURL = emby.URL
+	a.cfg.APIKey = "emby-key"
+	a.cfg.SyncAPIKeyHash = syncAPIKeyHash(key)
+	if got := request(a, http.MethodPost, "/api/external/sync", "", "", ""); got.Code != http.StatusUnauthorized {
+		t.Fatalf("missing key status=%d body=%s", got.Code, got.Body.String())
+	}
+	r := httptest.NewRequest(http.MethodPost, "/api/external/sync", nil)
+	r.Header.Set("X-Api-Key", key)
+	w := httptest.NewRecorder()
+	a.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) {
+		t.Fatalf("external sync status=%d body=%s", w.Code, w.Body.String())
+	}
+	if strings.Contains(w.Body.String(), `"Items"`) {
+		t.Fatalf("external sync exposed catalog: %s", w.Body.String())
+	}
+}
+
 func TestAuthenticationAndCSRF(t *testing.T) {
 	a := testApp(t)
 	for _, route := range []string{"/api/catalog", "/api/settings", "/api/download/1", "/api/images/1/Primary"} {
@@ -408,5 +477,22 @@ func TestOriginalMetadataSurvivesSnapshot(t *testing.T) {
 	}
 	if string(again.Metadata) != string(i.Metadata) || !strings.Contains(string(again.Metadata), "preserve-me") {
 		t.Fatal("metadata lost or recursively nested")
+	}
+}
+
+func TestCatalogForClientOmitsDuplicateRawMetadata(t *testing.T) {
+	original := Catalog{
+		Libraries: []Item{{ID: "library", Name: "Movies", Metadata: json.RawMessage(`{"Id":"library","extra":"large"}`)}},
+		Items:     []Item{{ID: "movie", Name: "Title", Type: "Movie", ProductionYear: 2026, Metadata: json.RawMessage(`{"Id":"movie","extra":"large"}`)}},
+	}
+	client := catalogForClient(original)
+	if client.Items[0].Metadata != nil || client.Libraries[0].Metadata != nil {
+		t.Fatal("client catalog still contains duplicate raw metadata")
+	}
+	if client.Items[0].Name != "Title" || client.Items[0].ProductionYear != 2026 {
+		t.Fatalf("client catalog lost explicit fields: %+v", client.Items[0])
+	}
+	if original.Items[0].Metadata == nil || original.Libraries[0].Metadata == nil {
+		t.Fatal("client conversion modified the persisted catalog")
 	}
 }

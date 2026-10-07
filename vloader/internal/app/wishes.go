@@ -585,7 +585,8 @@ func (plainSMTPAuth) Next([]byte, bool) ([]byte, error) { return nil, nil }
 
 func (a *App) updateWish(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Status string `json:"status"`
+		Status         string `json:"status"`
+		RootFolderPath string `json:"rootFolderPath"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -621,7 +622,11 @@ func (a *App) updateWish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Status == "approved" {
-		if err := a.dispatchWish(r.Context(), requested); err != nil {
+		if strings.TrimSpace(in.RootFolderPath) == "" {
+			fail(w, http.StatusBadRequest, "Select a destination folder before approval")
+			return
+		}
+		if err := a.dispatchWish(r.Context(), requested, in.RootFolderPath); err != nil {
 			log.Printf("vloader: %s for request %s: %v", err, requested.ID, err)
 			fail(w, http.StatusBadGateway, "Could not send the request to Sonarr or Radarr; check the automation settings and logs")
 			return

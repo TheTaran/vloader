@@ -1,4 +1,9 @@
 ## Unreleased
+- Add a compact mobile navigation that exposes every library, responsive collection/settings/request layouts, larger touch targets, valid poster controls and lazy-decoded artwork.
+- Remove duplicate retained Emby raw metadata from browser catalog responses to reduce transfer and parsing costs on mobile devices while preserving it in server snapshots.
+- Add an admin-managed external sync API for Radarr and Sonarr webhooks. Keys are shown once, stored only as SHA-256 hashes and can be revoked from Settings.
+- Let administrators select a current Radarr or Sonarr root folder before approval; validate the choice against the service and send it only during approval.
+- Reuse the request-search poster in request cards so requester and administrator views show the selected title consistently.
 
 ## v0.2.1
 - Refresh requests immediately after library sync and match exact titles when Emby omits the requested provider ID, while rejecting conflicting IDs.

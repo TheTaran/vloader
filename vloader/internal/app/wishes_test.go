@@ -148,7 +148,7 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 			t.Fatalf("admin sees requester name %q, want display name", response.Items[0].RequesterName)
 		}
 	}
-	body := `{"status":"approved"}`
+	body := `{"status":"approved","rootFolderPath":"/media/movies"}`
 	if updated := request(a, http.MethodPost, "/api/wishes/"+wish.ID, body, a.origin, "user-session"); updated.Code != http.StatusForbidden {
 		t.Fatalf("non-admin changed request: %d", updated.Code)
 	}

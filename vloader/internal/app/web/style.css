@@ -44,7 +44,7 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 /* Scale poster artwork down by ten percent while preserving its aspect ratio. */
 .poster{width:85.5%;margin-inline:auto}
 .wish-row{align-items:flex-start}
-.wish-poster{width:76px;height:114px;flex:0 0 76px;object-fit:cover;border-radius:6px;background:#242c24}
+.wish-poster{width:105px;height:158px;flex:0 0 105px;object-fit:contain;border-radius:6px;background:#242c24}
 .wish-row{flex-wrap:wrap}.wish-banner{width:100%;height:auto;max-height:260px;aspect-ratio:2.2;object-fit:cover;object-position:center;border-radius:6px;background:#101312}.wish-row:has(.wish-banner:not(.hidden)){align-items:stretch}.tvdb-attribution{max-width:900px;margin:10px 0 22px;color:var(--muted);font-size:11px}.tvdb-attribution a{color:var(--lime)}
 .wish-content{flex:1;min-width:0}
 .wish-reference{display:inline-block;color:var(--lime);font-size:11px;margin:0 0 8px}
@@ -65,3 +65,47 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 .collection-title{font-size:24px;margin:28px 0 0}
 .request-search{border-bottom:1px solid var(--line);padding-bottom:24px;margin-bottom:24px}.request-search h3{font-size:18px;font-weight:500;margin:0 0 8px}.request-search>p{margin-bottom:14px}.request-search-controls{display:grid;grid-template-columns:170px minmax(180px,1fr) auto;gap:8px}.request-search-controls select,.request-search-controls input{width:100%;margin:0;background:#111612;border:1px solid #384032;border-radius:6px;padding:11px;color:var(--text)}.request-search-status{margin:12px 0 0}.request-search-results{display:grid;gap:8px;margin-top:12px}.request-search-result{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;background:#202522;border:1px solid #303832;border-radius:7px;padding:13px}.request-search-result h4{font-size:14px;font-weight:500;margin:0 0 4px}.request-search-result small{color:var(--lime);font-size:10px}.request-search-result p{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;color:var(--muted);font-size:11px;line-height:1.45;margin:7px 0 0}.request-search-result .primary{flex:0 0 auto;padding:9px 13px}@media(max-width:560px){.request-search-controls{grid-template-columns:1fr}.request-search-result{flex-direction:column}.request-search-result .primary{width:100%}}
 .request-search-image{width:105px;height:158px;flex:0 0 105px;object-fit:contain;object-position:center;border-radius:5px;background:#151918}.request-search-copy{flex:1;min-width:0}@media(max-width:560px){.request-search-image{width:105px;height:158px;flex-basis:105px}}
+.wish-actions{align-items:flex-end}.wish-actions label{display:grid;gap:5px;color:var(--muted);font-size:10px}.wish-actions select{min-width:220px;background:#111612;border:1px solid #384032;border-radius:6px;padding:9px;color:var(--text)}
+
+/* Mobile navigation keeps every library reachable instead of hiding the list. */
+.mobile-menu{display:none}
+@media(max-width:850px){
+ body{overflow-x:hidden}
+ aside{width:100%;max-height:64px;min-height:64px;padding:11px 14px;z-index:50;transition:max-height .2s ease;box-shadow:0 5px 18px #0008}
+ aside.mobile-open{max-height:85dvh;overflow-y:auto}
+ aside .brand{font-size:22px;min-height:42px;padding-right:52px}
+ aside .brand .mark{width:30px;height:30px;font-size:24px;margin-right:8px}
+ aside .brand .dot{display:inline}
+ .mobile-menu{display:grid;place-items:center;position:absolute;right:14px;top:12px;width:40px;height:40px;border:1px solid var(--line);border-radius:7px;background:#1d221f;color:var(--text);font-size:24px;z-index:2}
+ aside:not(.mobile-open)>.nav-label,aside:not(.mobile-open)>#all-content-nav,aside:not(.mobile-open)>#libraries,aside:not(.mobile-open)>#settings-nav,aside:not(.mobile-open)>#wishes-nav,aside:not(.mobile-open)>.side-bottom{display:none}
+ aside.mobile-open .nav-label,aside.mobile-open #libraries,aside.mobile-open .side-bottom{display:block}
+ aside.mobile-open .nav span{display:inline}
+ aside.mobile-open .nav-label{margin:18px 10px 7px}
+ aside.mobile-open .nav{min-height:44px;margin:1px 0;padding:10px 12px;font-size:14px}
+ aside.mobile-open .side-bottom{padding-top:14px;margin-top:8px}
+ main{margin-left:0;padding:64px 14px 0;min-width:0}
+ header{height:52px}
+ .collection-meta{align-items:flex-start;gap:6px;flex-wrap:wrap;padding:16px 0;line-height:1.55}
+ .collection-meta>div{min-width:0}
+ .collection-meta strong{display:block;font-size:12px;overflow-wrap:anywhere}
+ .collection-meta .divider{display:none}
+ .toolbar{align-items:stretch;padding:16px 0;gap:8px}
+ .search{min-width:0;margin-left:0}
+ .poster{width:100%}
+ .movie h3{font-size:13px}.movie p{font-size:11.5px}
+ .settings-card{width:100%;max-width:none}
+ .settings-tabs{margin-inline:-14px;padding-inline:14px}
+ .settings-tab{min-height:44px}
+ .episode-list{margin-left:0}.episode-row{align-items:stretch}.episode-list .episode-detail{white-space:normal;line-height:1.35}
+ .download-action.button.primary,.poster .download-indicator.download-action{min-height:36px;min-width:64px;padding:8px 10px}
+ .wish-list-panel{margin-top:20px}.wish-row{padding:14px;gap:12px}.wish-actions{width:100%}.wish-actions label{width:100%;margin:0}.wish-actions select{width:100%;min-width:0}.wish-actions .secondary{flex:1;min-height:44px}
+ dialog{width:calc(100vw - 20px);max-height:calc(100dvh - 20px);padding:22px 16px}.close{min-width:44px;min-height:44px}
+ footer{gap:12px;flex-wrap:wrap}
+}
+@media(max-width:380px){main{padding-inline:10px}.grid{gap:16px 8px}.movie h3{font-size:12px}.collection-title{font-size:21px}}
+
+/* Keep the detail button and the download link as separate valid controls. */
+.poster-shell{position:relative;width:85.5%;margin-inline:auto}
+.poster-shell .poster{width:100%;margin:0}
+.poster-shell .download-indicator{position:absolute;right:50%;bottom:12px;transform:translateX(50%);display:grid;place-items:center;box-sizing:border-box;height:25.5px;min-width:54.4px;padding:6.75px 9.75px;border-radius:4.25px;background:var(--lime);color:#14220b;font-size:9px;line-height:12px;z-index:2}
+@media(max-width:850px){.poster-shell{width:100%}.poster-shell .download-indicator{min-height:36px;min-width:64px;padding:8px 10px}}

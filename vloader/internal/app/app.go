@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
@@ -59,6 +60,7 @@ type Config struct {
 	RadarrAPIKey        string
 	SonarrURL           string
 	SonarrAPIKey        string
+	SyncAPIKeyHash      string
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
@@ -387,11 +389,12 @@ func (a *App) Handler() http.Handler {
 			jsonOut(w, Catalog{})
 			return
 		}
-		jsonOut(w, a.catalog)
+		jsonOut(w, catalogForClient(a.catalog))
 	})))
 	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
 	m.Handle("GET /api/wishes/search", a.guard(http.HandlerFunc(a.searchWishes)))
 	m.Handle("GET /api/request-image", a.guard(http.HandlerFunc(a.requestImage)))
+	m.Handle("GET /api/settings/automation/roots", a.adminGuard(http.HandlerFunc(a.automationRoots)))
 	m.Handle("POST /api/wishes", a.guard(http.HandlerFunc(a.createWish)))
 	m.Handle("GET /api/wishes/{id}/metadata", a.guard(http.HandlerFunc(a.getWishMetadata)))
 	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))
@@ -400,8 +403,11 @@ func (a *App) Handler() http.Handler {
 	m.Handle("POST /api/settings/dashboard", a.adminGuard(http.HandlerFunc(a.saveDashboardSettings)))
 	m.Handle("POST /api/settings/notifications", a.adminGuard(http.HandlerFunc(a.saveNotificationSettings)))
 	m.Handle("POST /api/settings/automation", a.adminGuard(http.HandlerFunc(a.saveAutomationSettings)))
+	m.Handle("POST /api/settings/sync-key", a.adminGuard(http.HandlerFunc(a.createSyncAPIKey)))
+	m.Handle("POST /api/settings/sync-key/revoke", a.adminGuard(http.HandlerFunc(a.revokeSyncAPIKey)))
 	m.Handle("POST /api/settings/notifications/test", a.adminGuard(http.HandlerFunc(a.testNotificationSettings)))
 	m.Handle("POST /api/sync", a.adminGuard(http.HandlerFunc(a.syncCatalog)))
+	m.HandleFunc("POST /api/external/sync", a.externalSync)
 	m.Handle("GET /api/images/{id}/{kind}", a.guard(http.HandlerFunc(a.image)))
 	m.Handle("GET /api/download/{id}", a.guard(http.HandlerFunc(a.download)))
 	sub, _ := fs.Sub(assets, "web")
@@ -412,7 +418,8 @@ func (a *App) Handler() http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 		w.Header().Set("Cache-Control", "no-store")
-		if r.Method != "GET" && r.Method != "HEAD" && r.Header.Get("Origin") != a.origin {
+		machineSync := r.Method == http.MethodPost && r.URL.Path == "/api/external/sync"
+		if r.Method != "GET" && r.Method != "HEAD" && !machineSync && r.Header.Get("Origin") != a.origin {
 			fail(w, 403, "Invalid request origin")
 			return
 		}
@@ -783,7 +790,56 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if claim == "" {
 		claim = "groups"
 	}
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "RadarrURL": c.RadarrURL, "HasRadarrAPIKey": c.RadarrAPIKey != "", "SonarrURL": c.SonarrURL, "HasSonarrAPIKey": c.SonarrAPIKey != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "RadarrURL": c.RadarrURL, "HasRadarrAPIKey": c.RadarrAPIKey != "", "SonarrURL": c.SonarrURL, "HasSonarrAPIKey": c.SonarrAPIKey != "", "HasSyncAPIKey": c.SyncAPIKeyHash != ""})
+}
+
+func syncAPIKeyHash(key string) string {
+	sum := sha256.Sum256([]byte(key))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+func (a *App) saveSyncAPIKeyHash(hash string) error {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	c := a.config()
+	c.SyncAPIKeyHash = hash
+	if err := persist(a.data+"/settings.json", c); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.cfg = c
+	a.mu.Unlock()
+	return nil
+}
+
+func (a *App) createSyncAPIKey(w http.ResponseWriter, r *http.Request) {
+	key := random()
+	if err := a.saveSyncAPIKeyHash(syncAPIKeyHash(key)); err != nil {
+		fail(w, http.StatusInternalServerError, "Failed to save sync API key")
+		return
+	}
+	jsonOut(w, map[string]string{"apiKey": key})
+}
+
+func (a *App) revokeSyncAPIKey(w http.ResponseWriter, r *http.Request) {
+	if err := a.saveSyncAPIKeyHash(""); err != nil {
+		fail(w, http.StatusInternalServerError, "Failed to revoke sync API key")
+		return
+	}
+	jsonOut(w, map[string]bool{"ok": true})
+}
+
+func (a *App) validSyncAPIKey(r *http.Request) bool {
+	key := strings.TrimSpace(r.Header.Get("X-Api-Key"))
+	if auth := strings.TrimSpace(r.Header.Get("Authorization")); key == "" && strings.HasPrefix(auth, "Bearer ") {
+		key = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	}
+	expected := a.config().SyncAPIKeyHash
+	if key == "" || len(key) > 512 || expected == "" {
+		return false
+	}
+	actual := syncAPIKeyHash(key)
+	return subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
 }
 
 func validateArrURL(raw string) bool {
@@ -1029,6 +1085,7 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = old.SMTPUsername, old.SMTPPassword, old.SMTPFrom
 	c.RadarrURL, c.RadarrAPIKey = old.RadarrURL, old.RadarrAPIKey
 	c.SonarrURL, c.SonarrAPIKey = old.SonarrURL, old.SonarrAPIKey
+	c.SyncAPIKeyHash = old.SyncAPIKeyHash
 	if !c.UpdateOIDC && c.APIKey == "" {
 		if c.EmbyURL != old.EmbyURL {
 			fail(w, 400, "Enter the API key again when switching servers")
@@ -1122,11 +1179,55 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer a.syncMu.Unlock()
+	next, status, err := a.runCatalogSync(r.Context())
+	if err != nil {
+		fail(w, status, err.Error())
+		return
+	}
+	jsonOut(w, catalogForClient(next))
+}
+
+// catalogForClient omits the original Emby payload retained for lossless
+// snapshots. The GUI already receives every field it uses explicitly; avoiding
+// the duplicate raw object keeps large libraries reliable on mobile networks.
+func catalogForClient(c Catalog) Catalog {
+	result := c
+	result.Items = make([]Item, len(c.Items))
+	copy(result.Items, c.Items)
+	for i := range result.Items {
+		result.Items[i].Metadata = nil
+	}
+	result.Libraries = make([]Item, len(c.Libraries))
+	copy(result.Libraries, c.Libraries)
+	for i := range result.Libraries {
+		result.Libraries[i].Metadata = nil
+	}
+	return result
+}
+
+func (a *App) externalSync(w http.ResponseWriter, r *http.Request) {
+	if !a.validSyncAPIKey(r) {
+		fail(w, http.StatusUnauthorized, "Invalid API key")
+		return
+	}
+	if !a.syncMu.TryLock() {
+		fail(w, http.StatusConflict, "Sync already in progress")
+		return
+	}
+	defer a.syncMu.Unlock()
+	next, status, err := a.runCatalogSync(r.Context())
+	if err != nil {
+		fail(w, status, err.Error())
+		return
+	}
+	jsonOut(w, map[string]any{"ok": true, "updated": next.Updated})
+}
+
+func (a *App) runCatalogSync(ctx context.Context) (Catalog, int, error) {
 	c := a.config()
 	var libs struct{ Items []Item }
-	if e := a.fetch(r.Context(), c, "/Library/MediaFolders", &libs); e != nil {
-		fail(w, 502, e.Error())
-		return
+	if err := a.fetch(ctx, c, "/Library/MediaFolders", &libs); err != nil {
+		return Catalog{}, http.StatusBadGateway, err
 	}
 	next := Catalog{SourceURL: c.EmbyURL, Libraries: libs.Items, Items: []Item{}, Updated: time.Now()}
 	for _, lib := range libs.Items {
@@ -1136,9 +1237,8 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 				TotalRecordCount int
 			}
 			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "SortBy": {"DateCreated"}, "SortOrder": {"Descending"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
-			if e := a.fetch(r.Context(), c, "/Items?"+q.Encode(), &page); e != nil {
-				fail(w, 502, e.Error())
-				return
+			if err := a.fetch(ctx, c, "/Items?"+q.Encode(), &page); err != nil {
+				return Catalog{}, http.StatusBadGateway, err
 			}
 			for _, item := range page.Items {
 				item.LibraryID = lib.ID
@@ -1149,14 +1249,12 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 			if start > 100000 {
-				fail(w, 422, "Library exceeds 100,000 items")
-				return
+				return Catalog{}, http.StatusUnprocessableEntity, errors.New("Library exceeds 100,000 items")
 			}
 		}
 	}
-	if e := persist(a.data+"/catalog.json", next); e != nil {
-		fail(w, 500, "Failed to save the catalog")
-		return
+	if err := persist(a.data+"/catalog.json", next); err != nil {
+		return Catalog{}, http.StatusInternalServerError, errors.New("Failed to save the catalog")
 	}
 	a.mu.Lock()
 	a.catalog = next
@@ -1176,7 +1274,7 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 	for _, wish := range notices {
 		a.enqueueAvailabilityNotice(wish)
 	}
-	jsonOut(w, next)
+	return next, http.StatusOK, nil
 }
 func (a *App) sourceItem(id string) (Item, Config, bool) {
 	a.mu.RLock()

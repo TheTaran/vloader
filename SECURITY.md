@@ -14,6 +14,7 @@ The Emby API key is a server-side credential. The configured Emby server is an a
 - HttpOnly/SameSite cookies, Secure on HTTPS, mutation Origin checks, CSP and frame blocking.
 - OIDC signature, issuer, audience, expiry, nonce, browser-bound state, PKCE and exact subject/group allowlists from verified ID-token claims.
 - Server-side Emby API tokens; redirects rejected to prevent credential forwarding.
+- The external `POST /api/external/sync` webhook accepts only an administrator-generated high-entropy key in `X-Api-Key` or a Bearer header. vloader stores only its SHA-256 hash, displays the raw key once, and supports immediate rotation and revocation. This machine endpoint is the sole mutation exempt from browser Origin checks; its API-key check replaces session and CSRF authentication.
 - Read-only media roots and os.OpenRoot confinement, including symlink escapes.
 - Non-root container, dropped capabilities, read-only root filesystem, bounded logs and resources.
 - Atomic mode-0600 settings/catalog/request snapshots. Emby, OIDC, SMTP, Radarr and Sonarr credentials remain plaintext in the protected persistent volume and are never returned to ordinary users. Protect the host and backups. SMTP notifications use STARTTLS with certificate verification by default. Administrators can explicitly disable TLS for a trusted plain-SMTP relay; in that mode message content and SMTP credentials are transmitted unencrypted.
