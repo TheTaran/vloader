@@ -1,5 +1,19 @@
 # Release validation
 
+## v0.2.2
+
+Reviewed implementation commit: `844d913` (`feat: add external sync and mobile library access`), based on `v0.2.1`. This is an author self-review, not an independent review. The review covered the external sync API authentication and secret persistence, the sole Origin-check exemption, administrator-only root-folder selection, configured Arr target boundaries, request artwork proxying, catalog snapshot preservation, reduced browser catalog responses, and mobile navigation and control structure. No critical or high-severity findings were identified.
+
+Validation completed:
+
+- `go test ./...`, `go test -race ./...`, and `go vet ./...` using Go 1.27.1.
+- `govulncheck ./...`: no reachable vulnerabilities.
+- Node 24 JavaScript syntax check, `docker compose config --quiet`, and `git diff --check`.
+- Docker image build and development-container restart; `/healthz` returned `{"status":"ok"}` and the container reported healthy.
+- Verified the served HTML contains the mobile menu and the served CSS/JavaScript contain the responsive library navigation and valid poster control implementation.
+
+Live Radarr, Sonarr, Emby and OIDC integration calls were not exercised during release validation; their request and sync behavior is covered with local mock-server tests. No interactive physical-device browser test or production deployment was performed.
+
 ## v0.1.12
 
 Reviewed implementation commit: `216f76d` (`feat: enrich requests and downloads`), based on `60c179f` (`v0.1.11`). This is an author self-review, not an independent review. The review covered request authentication and ownership, admin-only settings and request moderation, verified OIDC role claims and presentation-only display names, TMDb token redaction and server-side lookup, bounded TMDb requests, HTML escaping of requester/title data, and preservation of the last settings/catalog snapshots on save or sync failure. No critical or high-severity findings were identified.
