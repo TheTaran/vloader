@@ -45,7 +45,7 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 .poster{width:85.5%;margin-inline:auto}
 .wish-row{align-items:flex-start}
 .wish-poster{width:105px;height:158px;flex:0 0 105px;object-fit:contain;border-radius:6px;background:#242c24}
-.wish-row{flex-wrap:wrap}.wish-banner{width:100%;height:auto;max-height:260px;aspect-ratio:2.2;object-fit:cover;object-position:center;border-radius:6px;background:#101312}.wish-row:has(.wish-banner:not(.hidden)){align-items:stretch}.tvdb-attribution{max-width:900px;margin:10px 0 22px;color:var(--muted);font-size:11px}.tvdb-attribution a{color:var(--lime)}
+.wish-row{flex-wrap:wrap}.tvdb-attribution{max-width:900px;margin:10px 0 22px;color:var(--muted);font-size:11px}.tvdb-attribution a{color:var(--lime)}
 .wish-content{flex:1;min-width:0}
 .wish-reference{display:inline-block;color:var(--lime);font-size:11px;margin:0 0 8px}
 .wish-metadata{color:var(--muted);font-size:12px;margin:6px 0}
