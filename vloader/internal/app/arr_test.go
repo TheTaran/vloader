@@ -42,7 +42,7 @@ func TestDispatchWishToRadarr(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Movie", Type: "Movie", Source: "tmdb", ExternalID: "123"}, "/media/movies"); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Movie", Type: "Movie", Source: "tmdb", ExternalID: "123"}, "/media/movies", 4, 0); err != nil {
 		t.Fatal(err)
 	}
 	if added["tmdbId"] != float64(123) || added["qualityProfileId"] != float64(4) || added["rootFolderPath"] != "/media/movies" {
@@ -84,7 +84,7 @@ func TestDispatchWishToSonarr(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.SonarrURL, a.cfg.SonarrAPIKey = server.URL, "sonarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Series", Type: "Series", Source: "imdb", ExternalID: "tt1234567"}, "/media/series"); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Example Series", Type: "Series", Source: "imdb", ExternalID: "tt1234567"}, "/media/series", 2, 1); err != nil {
 		t.Fatal(err)
 	}
 	if added["tvdbId"] != float64(456) || added["qualityProfileId"] != float64(2) || added["languageProfileId"] != float64(1) || added["rootFolderPath"] != "/media/series" {
@@ -96,7 +96,7 @@ func TestUpdateWishRequiresAutomationBeforeApproval(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	a.wishes = []Wish{{ID: "wish-1", Title: "Example", Type: "Movie", Status: "pending"}}
-	w := request(a, http.MethodPost, "/api/wishes/wish-1", `{"status":"approved","rootFolderPath":"/media/movies"}`, a.origin, "admin-session")
+	w := request(a, http.MethodPost, "/api/wishes/wish-1", `{"status":"approved","rootFolderPath":"/media/movies","qualityProfileId":1}`, a.origin, "admin-session")
 	if w.Code != http.StatusBadGateway || !strings.Contains(w.Body.String(), "automation settings") {
 		t.Fatalf("approval without Radarr should fail clearly: %d %s", w.Code, w.Body.String())
 	}
@@ -107,10 +107,16 @@ func TestUpdateWishRequiresAutomationBeforeApproval(t *testing.T) {
 
 func TestAutomationRootsAreAdminOnlyAndComeFromServices(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v3/rootfolder" {
+		switch r.URL.Path {
+		case "/api/v3/rootfolder":
+			json.NewEncoder(w).Encode([]arrRootFolder{{Path: "/media/primary"}, {Path: "/media/archive"}})
+		case "/api/v3/qualityprofile":
+			json.NewEncoder(w).Encode([]arrProfile{{ID: 1, Name: "HD"}})
+		case "/api/v3/languageprofile":
+			json.NewEncoder(w).Encode([]arrProfile{{ID: 2, Name: "English"}})
+		default:
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
-		json.NewEncoder(w).Encode([]arrRootFolder{{Path: "/media/primary"}, {Path: "/media/archive"}})
 	}))
 	defer server.Close()
 	a := testApp(t)
@@ -126,6 +132,35 @@ func TestAutomationRootsAreAdminOnlyAndComeFromServices(t *testing.T) {
 	got := request(a, http.MethodGet, "/api/settings/automation/roots", "", "", "admin-session")
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"Movie":["/media/primary","/media/archive"]`) || !strings.Contains(got.Body.String(), `"Series":["/media/primary","/media/archive"]`) {
 		t.Fatalf("unexpected root folder response: %d %s", got.Code, got.Body.String())
+	}
+	got = request(a, http.MethodGet, "/api/settings/automation/options", "", "", "admin-session")
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"qualityProfiles":[{"id":1,"name":"HD"}]`) || !strings.Contains(got.Body.String(), `"languageProfiles":[{"id":2,"name":"English"}]`) {
+		t.Fatalf("unexpected approval options response: %d %s", got.Code, got.Body.String())
+	}
+}
+
+func TestDispatchWishRejectsProfileNotOfferedByRadarr(t *testing.T) {
+	var posts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v3/movie/lookup":
+			json.NewEncoder(w).Encode([]arrMovieLookup{{Title: "Example", TMDBID: 123}})
+		case "/api/v3/rootfolder":
+			json.NewEncoder(w).Encode([]arrRootFolder{{Path: "/media/movies"}})
+		case "/api/v3/qualityprofile":
+			json.NewEncoder(w).Encode([]arrProfile{{ID: 4, Name: "HD"}})
+		case "/api/v3/movie":
+			posts++
+		default:
+			t.Fatalf("unexpected request %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	a := testApp(t)
+	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
+	err := a.dispatchWish(t.Context(), Wish{Title: "Example", Type: "Movie", Source: "tmdb", ExternalID: "123"}, "/media/movies", 99, 0)
+	if err == nil || !strings.Contains(err.Error(), "valid Radarr quality profile") || posts != 0 {
+		t.Fatalf("invalid profile was dispatched: err=%v posts=%d", err, posts)
 	}
 }
 
@@ -146,7 +181,7 @@ func TestApprovalRejectsUnknownRootFolderBeforeAdding(t *testing.T) {
 	defer server.Close()
 	a := testApp(t)
 	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
-	err := a.dispatchWish(t.Context(), Wish{Title: "Example", Type: "Movie", Source: "tmdb", ExternalID: "123"}, "/media/not-configured")
+	err := a.dispatchWish(t.Context(), Wish{Title: "Example", Type: "Movie", Source: "tmdb", ExternalID: "123"}, "/media/not-configured", 1, 0)
 	if err == nil || !strings.Contains(err.Error(), "valid Radarr root folder") || posts != 0 {
 		t.Fatalf("unknown root folder was not rejected safely: err=%v posts=%d", err, posts)
 	}
@@ -217,7 +252,7 @@ func TestDispatchWishUsesFirstRadarrDefaults(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.RadarrURL, a.cfg.RadarrAPIKey = server.URL, "radarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Movie", Type: "Movie", Source: "tmdb", ExternalID: "321"}, "/radarr/movies"); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Movie", Type: "Movie", Source: "tmdb", ExternalID: "321"}, "/radarr/movies", 7, 0); err != nil {
 		t.Fatal(err)
 	}
 	if added["rootFolderPath"] != "/radarr/movies" || added["qualityProfileId"] != float64(7) {
@@ -247,7 +282,7 @@ func TestDispatchWishUsesFirstSonarrDefaults(t *testing.T) {
 	}))
 	defer server.Close()
 	a.cfg.SonarrURL, a.cfg.SonarrAPIKey = server.URL, "sonarr-secret"
-	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Series", Type: "Series", Source: "tvdb", ExternalID: "654"}, "/sonarr/series"); err != nil {
+	if err := a.dispatchWish(t.Context(), Wish{Title: "Default Series", Type: "Series", Source: "tvdb", ExternalID: "654"}, "/sonarr/series", 8, 2); err != nil {
 		t.Fatal(err)
 	}
 	if added["rootFolderPath"] != "/sonarr/series" || added["qualityProfileId"] != float64(8) || added["languageProfileId"] != float64(2) {
@@ -372,7 +407,7 @@ func TestSonarrSearchRequestIsDispatchedOnlyAfterAdminApproval(t *testing.T) {
 	if err := json.Unmarshal(created.Body.Bytes(), &wish); err != nil {
 		t.Fatal(err)
 	}
-	approved := request(a, http.MethodPost, "/api/wishes/"+wish.ID, `{"status":"approved","rootFolderPath":"/media/series"}`, a.origin, "admin-session")
+	approved := request(a, http.MethodPost, "/api/wishes/"+wish.ID, `{"status":"approved","rootFolderPath":"/media/series","qualityProfileId":2,"languageProfileId":1}`, a.origin, "admin-session")
 	if approved.Code != http.StatusOK || posts != 1 || a.wishes[0].Status != "approved" {
 		t.Fatalf("approval did not dispatch once: status=%d posts=%d wish=%+v body=%s", approved.Code, posts, a.wishes[0], approved.Body.String())
 	}

@@ -104,7 +104,7 @@ vloader preserves library and item IDs, parent relationships, descriptions, rele
 
 Configure the Radarr and Sonarr URLs and API keys under **Settings → Automation**. Users then search the matching service from **Requests** and select the exact movie or series. This creates a pending request only.
 
-An administrator sees every request, selects a destination folder returned by Radarr or Sonarr, and approves or declines it. On approval, vloader sends the selected title and folder to the matching service. Root folders and profiles remain managed by Radarr and Sonarr; their API keys never reach the browser.
+An administrator sees every request, selects a destination folder and quality profile returned by Radarr or Sonarr, and approves or declines it. Where Sonarr provides language profiles, the administrator selects one of those too. On approval, vloader sends the selected title and choices to the matching service. Root folders and profiles remain managed by Radarr and Sonarr; their API keys never reach the browser.
 
 Request cards show the selected poster and details returned by Radarr or Sonarr. During each Emby sync, vloader checks approved requests against the mirrored library. When it finds a match, the request becomes available and exposes its download action.
 
@@ -254,7 +254,7 @@ docker compose ps
 If Go is not installed on the host, use the pinned build image:
 
 ```bash
-docker run --rm -v "$PWD/vloader:/app" -w /app golang:1.27.1-alpine \
+docker run --rm -v "$PWD/vloader:/app" -w /app golang:1.27.2-alpine \
   sh -c 'go test ./... && go vet ./...'
 ```
 

@@ -55,13 +55,20 @@ type arrRootFolder struct {
 }
 
 type arrProfile struct {
-	ID int `json:"id"`
+	ID   int    `json:"id"`
+	Name string `json:"name"`
 }
 
 type arrDefaults struct {
 	RootFolder string
 	QualityID  int
 	LanguageID int
+}
+
+type arrApprovalOptions struct {
+	Roots            []string     `json:"roots"`
+	QualityProfiles  []arrProfile `json:"qualityProfiles"`
+	LanguageProfiles []arrProfile `json:"languageProfiles,omitempty"`
 }
 
 func boundedSearchText(value string, limit int) string {
@@ -264,10 +271,31 @@ func (a *App) requestImage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) automationRoots(w http.ResponseWriter, r *http.Request) {
+	options, err := a.loadAutomationOptions(r.Context())
+	if err != nil {
+		log.Printf("vloader: automation options lookup failed: %v", err)
+		fail(w, http.StatusBadGateway, "Could not load destination folders")
+		return
+	}
+	result := map[string][]string{"Movie": options["Movie"].Roots, "Series": options["Series"].Roots}
+	jsonOut(w, result)
+}
+
+func (a *App) automationOptions(w http.ResponseWriter, r *http.Request) {
+	options, err := a.loadAutomationOptions(r.Context())
+	if err != nil {
+		log.Printf("vloader: automation options lookup failed: %v", err)
+		fail(w, http.StatusBadGateway, "Could not load approval options")
+		return
+	}
+	jsonOut(w, options)
+}
+
+func (a *App) loadAutomationOptions(parent context.Context) (map[string]arrApprovalOptions, error) {
 	cfg := a.config()
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
-	result := map[string][]string{"Movie": {}, "Series": {}}
+	result := map[string]arrApprovalOptions{"Movie": {}, "Series": {}}
 	for mediaType, service := range map[string]struct{ base, key string }{
 		"Movie": {cfg.RadarrURL, cfg.RadarrAPIKey}, "Series": {cfg.SonarrURL, cfg.SonarrAPIKey},
 	} {
@@ -276,23 +304,70 @@ func (a *App) automationRoots(w http.ResponseWriter, r *http.Request) {
 		}
 		var roots []arrRootFolder
 		if _, err := a.arrRequest(ctx, service.base, service.key, http.MethodGet, "rootfolder", nil, &roots); err != nil {
-			log.Printf("vloader: %s root folder lookup failed: %v", mediaType, err)
-			fail(w, http.StatusBadGateway, "Could not load destination folders")
-			return
+			return nil, fmt.Errorf("%s root folder lookup failed: %w", mediaType, err)
+		}
+		var qualityProfiles []arrProfile
+		if _, err := a.arrRequest(ctx, service.base, service.key, http.MethodGet, "qualityprofile", nil, &qualityProfiles); err != nil {
+			return nil, fmt.Errorf("%s quality profile lookup failed: %w", mediaType, err)
+		}
+		options := arrApprovalOptions{QualityProfiles: usableProfiles(qualityProfiles)}
+		if len(options.QualityProfiles) == 0 {
+			return nil, fmt.Errorf("%s has no usable quality profile", mediaType)
 		}
 		seen := map[string]bool{}
 		for _, root := range roots {
 			folder := strings.TrimSpace(root.Path)
 			if folder != "" && !seen[folder] {
-				result[mediaType] = append(result[mediaType], folder)
+				options.Roots = append(options.Roots, folder)
 				seen[folder] = true
 			}
 		}
+		if mediaType == "Series" {
+			var languages []arrProfile
+			status, err := a.arrRequest(ctx, service.base, service.key, http.MethodGet, "languageprofile", nil, &languages)
+			if err != nil && status != http.StatusNotFound {
+				return nil, fmt.Errorf("Sonarr language profile lookup failed: %w", err)
+			}
+			options.LanguageProfiles = usableProfiles(languages)
+		}
+		result[mediaType] = options
 	}
-	jsonOut(w, result)
+	return result, nil
 }
 
-func (a *App) dispatchWish(ctx context.Context, wish Wish, rootFolder string) error {
+func usableProfiles(profiles []arrProfile) []arrProfile {
+	result := make([]arrProfile, 0, len(profiles))
+	seen := map[int]bool{}
+	for _, profile := range profiles {
+		if profile.ID < 1 || seen[profile.ID] {
+			continue
+		}
+		profile.Name = strings.TrimSpace(profile.Name)
+		if profile.Name == "" {
+			profile.Name = fmt.Sprintf("Profile %d", profile.ID)
+		}
+		result = append(result, profile)
+		seen[profile.ID] = true
+	}
+	return result
+}
+
+func selectedProfileID(profiles []arrProfile, selected int, label string, required bool) (int, error) {
+	if selected < 1 {
+		if required {
+			return 0, fmt.Errorf("select a %s", label)
+		}
+		return 0, nil
+	}
+	for _, profile := range profiles {
+		if profile.ID == selected {
+			return selected, nil
+		}
+	}
+	return 0, fmt.Errorf("select a valid %s", label)
+}
+
+func (a *App) dispatchWish(ctx context.Context, wish Wish, rootFolder string, qualityProfileID, languageProfileID int) error {
 	cfg := a.config()
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
@@ -301,18 +376,18 @@ func (a *App) dispatchWish(ctx context.Context, wish Wish, rootFolder string) er
 		if cfg.RadarrURL == "" {
 			return fmt.Errorf("Radarr is not configured")
 		}
-		return a.dispatchRadarr(ctx, cfg, wish, rootFolder)
+		return a.dispatchRadarr(ctx, cfg, wish, rootFolder, qualityProfileID)
 	case "Series":
 		if cfg.SonarrURL == "" {
 			return fmt.Errorf("Sonarr is not configured")
 		}
-		return a.dispatchSonarr(ctx, cfg, wish, rootFolder)
+		return a.dispatchSonarr(ctx, cfg, wish, rootFolder, qualityProfileID, languageProfileID)
 	default:
 		return fmt.Errorf("unsupported request type %q", wish.Type)
 	}
 }
 
-func (a *App) dispatchRadarr(ctx context.Context, cfg Config, wish Wish, rootFolder string) error {
+func (a *App) dispatchRadarr(ctx context.Context, cfg Config, wish Wish, rootFolder string, qualityProfileID int) error {
 	var matches []arrMovieLookup
 	query := url.Values{"term": {arrLookupTerm(wish)}}
 	if _, err := a.arrRequest(ctx, cfg.RadarrURL, cfg.RadarrAPIKey, http.MethodGet, "movie/lookup?"+query.Encode(), nil, &matches); err != nil {
@@ -340,7 +415,7 @@ func (a *App) dispatchRadarr(ctx context.Context, cfg Config, wish Wish, rootFol
 	if selected == nil || selected.TMDBID < 1 {
 		return fmt.Errorf("Radarr did not find a matching movie")
 	}
-	defaults, err := a.resolveRadarrDefaults(ctx, cfg, rootFolder)
+	defaults, err := a.resolveRadarrDefaults(ctx, cfg, rootFolder, qualityProfileID)
 	if err != nil {
 		return err
 	}
@@ -356,7 +431,7 @@ func (a *App) dispatchRadarr(ctx context.Context, cfg Config, wish Wish, rootFol
 	return nil
 }
 
-func (a *App) dispatchSonarr(ctx context.Context, cfg Config, wish Wish, rootFolder string) error {
+func (a *App) dispatchSonarr(ctx context.Context, cfg Config, wish Wish, rootFolder string, qualityProfileID, languageProfileID int) error {
 	var matches []arrSeriesLookup
 	query := url.Values{"term": {arrLookupTerm(wish)}}
 	if _, err := a.arrRequest(ctx, cfg.SonarrURL, cfg.SonarrAPIKey, http.MethodGet, "series/lookup?"+query.Encode(), nil, &matches); err != nil {
@@ -384,7 +459,7 @@ func (a *App) dispatchSonarr(ctx context.Context, cfg Config, wish Wish, rootFol
 	if selected == nil || selected.TVDBID < 1 {
 		return fmt.Errorf("Sonarr did not find a matching series")
 	}
-	defaults, err := a.resolveSonarrDefaults(ctx, cfg, rootFolder)
+	defaults, err := a.resolveSonarrDefaults(ctx, cfg, rootFolder, qualityProfileID, languageProfileID)
 	if err != nil {
 		return err
 	}
@@ -417,7 +492,7 @@ func selectRootFolder(roots []arrRootFolder, selected string) (string, bool) {
 	return "", false
 }
 
-func (a *App) resolveRadarrDefaults(ctx context.Context, cfg Config, selectedRoot string) (arrDefaults, error) {
+func (a *App) resolveRadarrDefaults(ctx context.Context, cfg Config, selectedRoot string, qualityProfileID int) (arrDefaults, error) {
 	var roots []arrRootFolder
 	if _, err := a.arrRequest(ctx, cfg.RadarrURL, cfg.RadarrAPIKey, http.MethodGet, "rootfolder", nil, &roots); err != nil {
 		return arrDefaults{}, fmt.Errorf("Radarr has no usable root folder")
@@ -427,13 +502,17 @@ func (a *App) resolveRadarrDefaults(ctx context.Context, cfg Config, selectedRoo
 		return arrDefaults{}, fmt.Errorf("select a valid Radarr root folder")
 	}
 	var profiles []arrProfile
-	if _, err := a.arrRequest(ctx, cfg.RadarrURL, cfg.RadarrAPIKey, http.MethodGet, "qualityprofile", nil, &profiles); err != nil || len(profiles) == 0 || profiles[0].ID < 1 {
+	if _, err := a.arrRequest(ctx, cfg.RadarrURL, cfg.RadarrAPIKey, http.MethodGet, "qualityprofile", nil, &profiles); err != nil {
 		return arrDefaults{}, fmt.Errorf("Radarr has no usable quality profile")
 	}
-	return arrDefaults{RootFolder: rootFolder, QualityID: profiles[0].ID}, nil
+	qualityID, err := selectedProfileID(usableProfiles(profiles), qualityProfileID, "Radarr quality profile", true)
+	if err != nil {
+		return arrDefaults{}, err
+	}
+	return arrDefaults{RootFolder: rootFolder, QualityID: qualityID}, nil
 }
 
-func (a *App) resolveSonarrDefaults(ctx context.Context, cfg Config, selectedRoot string) (arrDefaults, error) {
+func (a *App) resolveSonarrDefaults(ctx context.Context, cfg Config, selectedRoot string, qualityProfileID, languageProfileID int) (arrDefaults, error) {
 	var roots []arrRootFolder
 	if _, err := a.arrRequest(ctx, cfg.SonarrURL, cfg.SonarrAPIKey, http.MethodGet, "rootfolder", nil, &roots); err != nil {
 		return arrDefaults{}, fmt.Errorf("Sonarr has no usable root folder")
@@ -443,14 +522,22 @@ func (a *App) resolveSonarrDefaults(ctx context.Context, cfg Config, selectedRoo
 		return arrDefaults{}, fmt.Errorf("select a valid Sonarr root folder")
 	}
 	var profiles []arrProfile
-	if _, err := a.arrRequest(ctx, cfg.SonarrURL, cfg.SonarrAPIKey, http.MethodGet, "qualityprofile", nil, &profiles); err != nil || len(profiles) == 0 || profiles[0].ID < 1 {
+	if _, err := a.arrRequest(ctx, cfg.SonarrURL, cfg.SonarrAPIKey, http.MethodGet, "qualityprofile", nil, &profiles); err != nil {
 		return arrDefaults{}, fmt.Errorf("Sonarr has no usable quality profile")
 	}
-	defaults := arrDefaults{RootFolder: rootFolder, QualityID: profiles[0].ID}
+	qualityID, err := selectedProfileID(usableProfiles(profiles), qualityProfileID, "Sonarr quality profile", true)
+	if err != nil {
+		return arrDefaults{}, err
+	}
+	defaults := arrDefaults{RootFolder: rootFolder, QualityID: qualityID}
 	var languages []arrProfile
 	status, err := a.arrRequest(ctx, cfg.SonarrURL, cfg.SonarrAPIKey, http.MethodGet, "languageprofile", nil, &languages)
-	if err == nil && len(languages) > 0 && languages[0].ID > 0 {
-		defaults.LanguageID = languages[0].ID
+	if err == nil {
+		languageID, selectErr := selectedProfileID(usableProfiles(languages), languageProfileID, "Sonarr language profile", len(usableProfiles(languages)) > 0)
+		if selectErr != nil {
+			return arrDefaults{}, selectErr
+		}
+		defaults.LanguageID = languageID
 	} else if err != nil && status != http.StatusNotFound {
 		return arrDefaults{}, fmt.Errorf("Sonarr language profile lookup failed: %w", err)
 	}
