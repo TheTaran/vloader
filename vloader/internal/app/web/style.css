@@ -109,3 +109,4 @@ aside::-webkit-scrollbar-thumb{background:#59634f;border-radius:8px}
 .poster-shell .poster{width:100%;margin:0}
 .poster-shell .download-indicator{position:absolute;right:50%;bottom:12px;transform:translateX(50%);display:grid;place-items:center;box-sizing:border-box;height:25.5px;min-width:54.4px;padding:6.75px 9.75px;border-radius:4.25px;background:var(--lime);color:#14220b;font-size:9px;line-height:12px;z-index:2}
 @media(max-width:850px){.poster-shell{width:100%}.poster-shell .download-indicator{min-height:36px;min-width:64px;padding:8px 10px}}
+.confirm-dialog{width:min(420px,90vw)}.confirm-dialog h2{font-size:25px;margin-bottom:12px}.confirm-dialog p{color:var(--muted);font-size:13px;line-height:1.6}.confirm-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:26px}

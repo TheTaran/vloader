@@ -1,5 +1,6 @@
 ## Unreleased
 - Add an administrator-only Delete button for manually removing any request from the stored list.
+- Use an in-page vloader confirmation dialog for manual request deletion instead of the browser confirmation popup.
 - Update the pinned Go toolchain to 1.27.2 to resolve reachable standard-library vulnerabilities.
 - Add a compact mobile navigation that exposes every library, responsive collection/settings/request layouts, larger touch targets, valid poster controls and lazy-decoded artwork.
 - Remove duplicate retained Emby raw metadata from browser catalog responses to reduce transfer and parsing costs on mobile devices while preserving it in server snapshots.
