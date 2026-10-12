@@ -186,6 +186,34 @@ func TestExpiredAnsweredWishesAreRemovedButPendingWishesRemain(t *testing.T) {
 	}
 }
 
+func TestAdminCanDeleteWishAndRegularUserCannot(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+	a.wishes = []Wish{{ID: "delete-me", Requester: "viewer", Title: "Delete me", Type: "Movie", Status: "rejected", CreatedAt: time.Now().UTC()}}
+	if err := persist(a.data+"/wishes.json", a.wishes); err != nil {
+		t.Fatal(err)
+	}
+	if got := request(a, http.MethodPost, "/api/wishes/delete-me/delete", `{}`, a.origin, "user-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("regular user deleted request: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(a, http.MethodPost, "/api/wishes/delete-me/delete", `{}`, a.origin, "admin-session"); got.Code != http.StatusOK {
+		t.Fatalf("admin deletion failed: %d %s", got.Code, got.Body.String())
+	}
+	if len(a.wishes) != 0 {
+		t.Fatalf("request remained in memory: %+v", a.wishes)
+	}
+	var stored []Wish
+	if err := loadState(a.data+"/wishes.json", &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("request remained in storage: %+v", stored)
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

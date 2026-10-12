@@ -678,6 +678,33 @@ func (a *App) updateWish(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]bool{"ok": true})
 }
 
+func (a *App) deleteWish(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	next := make([]Wish, 0, len(a.wishes))
+	found := false
+	for _, wish := range a.wishes {
+		if wish.ID == id {
+			found = true
+			continue
+		}
+		next = append(next, wish)
+	}
+	if !found {
+		fail(w, http.StatusNotFound, "Request not found")
+		return
+	}
+	if err := persist(a.data+"/wishes.json", next); err != nil {
+		fail(w, http.StatusInternalServerError, "Could not delete the request")
+		return
+	}
+	a.wishes = next
+	delete(a.wishMetadata, id)
+	delete(a.availabilityEmailQueued, id)
+	jsonOut(w, map[string]bool{"ok": true})
+}
+
 func normalizeWishReference(source, value, mediaType string) (string, string, bool) {
 	if source == "manual" {
 		return "", "", value == ""

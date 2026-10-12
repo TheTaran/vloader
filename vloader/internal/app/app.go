@@ -405,6 +405,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("POST /api/wishes", a.guard(http.HandlerFunc(a.createWish)))
 	m.Handle("GET /api/wishes/{id}/metadata", a.guard(http.HandlerFunc(a.getWishMetadata)))
 	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))
+	m.Handle("POST /api/wishes/{id}/delete", a.adminGuard(http.HandlerFunc(a.deleteWish)))
 	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
 	m.Handle("POST /api/settings/dashboard", a.adminGuard(http.HandlerFunc(a.saveDashboardSettings)))
