@@ -1,5 +1,18 @@
 # Release validation
 
+## v0.2.4
+
+Reviewed implementation commit: `5007401` (`fix: retain pending requests`), based on `v0.2.3`. This is an author self-review, not an independent review. The review covered admin-only approval options, server-side validation of root folders and Arr quality/language profile IDs, request retention and atomic persistence. No critical or high-severity findings were identified.
+
+Validation completed:
+
+- `go test ./...`, `go test -race ./...`, and `go vet ./...` using Go 1.27.2.
+- `govulncheck ./...`: no reachable vulnerabilities; one advisory in a required module package that the application does not call.
+- JavaScript syntax check, `docker compose config --quiet`, and `git diff --check`.
+- Docker image build and development-container restart; `/healthz` returned `{"status":"ok"}` and the container reported healthy.
+
+Live Radarr, Sonarr, Emby and OIDC integration calls were not exercised during release validation; Arr behavior is covered with local mock-server tests. No production deployment was performed.
+
 ## v0.2.3
 
 Reviewed implementation commit: `9d2d9f7` (`docs: prepare v0.2.3 release`), based on `v0.2.2`. This is an author self-review, not an independent review. The review covered the complete English README rewrite, Quick Start accuracy, current mobile-navigation and external-sync documentation, Compose/environment references, and internal Markdown links. No critical or high-severity findings were identified.
