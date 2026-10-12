@@ -797,7 +797,7 @@ func pruneExpiredWishes(wishes []Wish, now time.Time) ([]Wish, bool) {
 	kept := make([]Wish, 0, len(wishes))
 	changed := false
 	for _, wish := range wishes {
-		if !wish.CreatedAt.IsZero() && wish.CreatedAt.Before(cutoff) {
+		if wish.Status != "pending" && !wish.CreatedAt.IsZero() && wish.CreatedAt.Before(cutoff) {
 			changed = true
 			continue
 		}
@@ -806,7 +806,7 @@ func pruneExpiredWishes(wishes []Wish, now time.Time) ([]Wish, bool) {
 	return kept, changed
 }
 
-// pruneExpiredWishesLocked removes requests older than the retention period.
+// pruneExpiredWishesLocked removes answered requests older than the retention period.
 // The caller must hold a.mu for writing and persist the result when needed.
 func (a *App) pruneExpiredWishesLocked(now time.Time) bool {
 	kept, changed := pruneExpiredWishes(a.wishes, now)

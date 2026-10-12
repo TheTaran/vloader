@@ -161,27 +161,28 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	}
 }
 
-func TestExpiredWishesAreRemovedFromListAndStorage(t *testing.T) {
+func TestExpiredAnsweredWishesAreRemovedButPendingWishesRemain(t *testing.T) {
 	a := testApp(t)
 	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
 	now := time.Now().UTC()
 	a.wishes = []Wish{
-		{ID: "expired", Requester: "viewer", Title: "Old request", Type: "Movie", Status: "pending", CreatedAt: now.Add(-wishRetention - time.Second)},
+		{ID: "expired", Requester: "viewer", Title: "Old answered request", Type: "Movie", Status: "rejected", CreatedAt: now.Add(-wishRetention - time.Second)},
+		{ID: "pending", Requester: "viewer", Title: "Old pending request", Type: "Movie", Status: "pending", CreatedAt: now.Add(-wishRetention - time.Second)},
 		{ID: "current", Requester: "viewer", Title: "Current request", Type: "Movie", Status: "pending", CreatedAt: now.Add(-wishRetention + time.Second)},
 	}
 	if err := persist(a.data+"/wishes.json", a.wishes); err != nil {
 		t.Fatal(err)
 	}
 	got := request(a, http.MethodGet, "/api/wishes", "", "", "user-session")
-	if got.Code != http.StatusOK || strings.Contains(got.Body.String(), "Old request") || !strings.Contains(got.Body.String(), "Current request") {
-		t.Fatalf("expired request remained visible: %d %s", got.Code, got.Body.String())
+	if got.Code != http.StatusOK || strings.Contains(got.Body.String(), "Old answered request") || !strings.Contains(got.Body.String(), "Old pending request") || !strings.Contains(got.Body.String(), "Current request") {
+		t.Fatalf("unexpected request retention: %d %s", got.Code, got.Body.String())
 	}
 	var stored []Wish
 	if err := loadState(a.data+"/wishes.json", &stored); err != nil {
 		t.Fatal(err)
 	}
-	if len(stored) != 1 || stored[0].ID != "current" {
-		t.Fatalf("expired request remained in storage: %+v", stored)
+	if len(stored) != 2 || stored[0].ID != "pending" || stored[1].ID != "current" {
+		t.Fatalf("unexpected stored requests after retention: %+v", stored)
 	}
 }
 

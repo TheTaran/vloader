@@ -5,7 +5,7 @@
 - Add an admin-managed external sync API for Radarr and Sonarr webhooks. Keys are shown once, stored only as SHA-256 hashes and can be revoked from Settings.
 - Let administrators select a current Radarr or Sonarr root folder before approval; validate the choice against the service and send it only during approval.
 - Let administrators select the live Radarr/Sonarr quality profile and, where provided, Sonarr language profile during request approval; validate selected profile IDs against the target service.
-- Remove requests from the stored list 14 days after their creation.
+- Remove answered requests from the stored list 14 days after their creation; keep open requests until an administrator responds.
 - Reuse the request-search poster in request cards so requester and administrator views show the selected title consistently.
 
 ## v0.2.1
