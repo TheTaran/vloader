@@ -1,5 +1,17 @@
 # Release validation
 
+## v0.2.5
+
+Reviewed implementation commit: `160e085` (`feat: allow admins to delete requests`), based on `v0.2.4`. This is an author self-review, not an independent review. The review covered administrator authorization, origin-protected deletion, atomic request persistence, metadata cache cleanup, and the browser confirmation flow. No critical or high-severity findings were identified.
+
+Validation completed:
+
+- `go test ./...`, `go test -race ./...`, and `go vet ./...` using Go 1.27.2.
+- JavaScript syntax check, `docker compose config --quiet`, and `git diff --check`.
+- Docker image build and development-container restart; `/healthz` returned `{"status":"ok"}` and the container reported healthy.
+
+No live Radarr, Sonarr, Emby or OIDC integration call was performed. No production deployment was performed.
+
 ## v0.2.4
 
 Reviewed implementation commit: `5007401` (`fix: retain pending requests`), based on `v0.2.3`. This is an author self-review, not an independent review. The review covered admin-only approval options, server-side validation of root folders and Arr quality/language profile IDs, request retention and atomic persistence. No critical or high-severity findings were identified.
