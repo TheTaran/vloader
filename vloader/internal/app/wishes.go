@@ -21,6 +21,8 @@ var imdbIDPattern = regexp.MustCompile(`^tt[0-9]{5,12}$`)
 var tmdbIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,11}$`)
 var tvdbIDPattern = regexp.MustCompile(`^[1-9][0-9]{0,11}$`)
 
+const wishRetention = 14 * 24 * time.Hour
+
 type WishMetadata struct {
 	Title       string   `json:"title"`
 	Overview    string   `json:"overview,omitempty"`
@@ -38,6 +40,7 @@ type wishMetadataCache struct {
 }
 
 func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
+	a.pruneExpiredWishes()
 	user, admin := a.user(r), a.role(r) == "admin"
 	a.mu.RLock()
 	defer a.mu.RUnlock()
@@ -378,6 +381,7 @@ func fetchWishMetadata(ctx context.Context, baseClient *http.Client, apiKey stri
 }
 
 func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
+	a.pruneExpiredWishes()
 	var in struct {
 		Title      string `json:"title"`
 		Type       string `json:"type"`
@@ -762,7 +766,7 @@ func wishMatches(wish Wish, item Item) bool {
 // The caller must hold a.mu for writing.
 func (a *App) resolveWishesLocked(catalog Catalog) ([]Wish, bool) {
 	var notices []Wish
-	changed := false
+	changed := a.pruneExpiredWishesLocked(time.Now().UTC())
 	for i := range a.wishes {
 		wish := &a.wishes[i]
 		if wish.Status == "pending" || wish.Status == "approved" {
@@ -786,4 +790,55 @@ func (a *App) resolveWishesLocked(catalog Catalog) ([]Wish, bool) {
 
 func (a *App) persistWishesLocked() error {
 	return persist(a.data+"/wishes.json", a.wishes)
+}
+
+func pruneExpiredWishes(wishes []Wish, now time.Time) ([]Wish, bool) {
+	cutoff := now.Add(-wishRetention)
+	kept := make([]Wish, 0, len(wishes))
+	changed := false
+	for _, wish := range wishes {
+		if !wish.CreatedAt.IsZero() && wish.CreatedAt.Before(cutoff) {
+			changed = true
+			continue
+		}
+		kept = append(kept, wish)
+	}
+	return kept, changed
+}
+
+// pruneExpiredWishesLocked removes requests older than the retention period.
+// The caller must hold a.mu for writing and persist the result when needed.
+func (a *App) pruneExpiredWishesLocked(now time.Time) bool {
+	kept, changed := pruneExpiredWishes(a.wishes, now)
+	if !changed {
+		return false
+	}
+	a.wishes = kept
+	for id := range a.wishMetadata {
+		found := false
+		for _, wish := range kept {
+			if wish.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(a.wishMetadata, id)
+			delete(a.availabilityEmailQueued, id)
+		}
+	}
+	return true
+}
+
+func (a *App) pruneExpiredWishes() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	previous := a.wishes
+	if !a.pruneExpiredWishesLocked(time.Now().UTC()) {
+		return
+	}
+	if err := a.persistWishesLocked(); err != nil {
+		a.wishes = previous
+		log.Printf("vloader: failed to prune expired requests: %v", err)
+	}
 }

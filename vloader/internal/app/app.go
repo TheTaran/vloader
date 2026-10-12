@@ -228,6 +228,12 @@ func New() (*App, error) {
 	if e := loadState(a.data+"/wishes.json", &a.wishes); e != nil {
 		return nil, e
 	}
+	if kept, changed := pruneExpiredWishes(a.wishes, time.Now().UTC()); changed {
+		a.wishes = kept
+		if e := persist(a.data+"/wishes.json", a.wishes); e != nil {
+			return nil, fmt.Errorf("prune expired requests: %w", e)
+		}
+	}
 	a.localAuth = env("LOCAL_AUTH_ENABLED", "true") == "true"
 	if a.localAuth {
 		p := os.Getenv("ADMIN_PASSWORD")
