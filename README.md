@@ -108,11 +108,23 @@ An administrator sees every request, selects a destination folder and quality pr
 
 Request cards show the selected poster and details returned by Radarr or Sonarr. During each Emby sync, vloader checks approved requests against the mirrored library. When it finds a match, the request becomes available and exposes its download action.
 
-### Request notifications
+### Notifications
 
-Configure the administrator email address and SMTP server under **Settings → Email notifications**. Save the settings and use **Send test email** to verify delivery.
+Open **Settings → Notifications** to configure delivery channels and choose the events for each channel independently:
 
-Under **Settings → Notifications**, configure SMTP and optionally a Slack Incoming Webhook. Choose Email and Slack independently for new requests, started downloads, and titles that become available in Emby. Download alerts include the user, media title, type and UTC timestamp. Requester emails are accepted only from a verified OIDC `email` claim and are never returned by the API. SMTP uses STARTTLS with certificate validation by default; disabling TLS is intended only for a trusted plain-SMTP relay. Slack webhooks must use `https://hooks.slack.com/services/...` and are stored as secrets.
+- New requests
+- Started downloads, including the user, title, media type and UTC timestamp
+- Approved requests that become available in Emby after a sync
+
+For email, enter the administrator address and SMTP settings, save, then use **Send test email**. SMTP uses STARTTLS with certificate validation by default; disabling TLS is intended only for a trusted plain-SMTP relay. Requester availability emails require a verified OIDC `email` claim and are never returned by the API.
+
+For Slack, create an **Incoming Webhook** in the Slack app configuration, select the destination channel, and copy its generated webhook URL. Paste that URL into **Slack → Incoming Webhook URL**, save the settings, then use **Send test Slack message**. vloader accepts only Slack webhook URLs in this form:
+
+```text
+https://hooks.slack.com/services/...
+```
+
+The webhook is stored as a secret, is never returned to the browser after saving, and can be removed from the Notifications page.
 
 ### External sync API
 
