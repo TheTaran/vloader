@@ -1,4 +1,6 @@
 ## Unreleased
+
+## v0.2.7
 - Add Slack Incoming Webhook notifications with separate Email and Slack controls for requests, downloads and newly available titles.
 - Email the configured administrator when an authenticated user starts a movie or episode download, including the user, title, type and UTC timestamp.
 - Update `golang.org/x/crypto` to v0.58.0.
