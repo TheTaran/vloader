@@ -1,4 +1,5 @@
 ## Unreleased
+- Email the configured administrator when an authenticated user starts a movie or episode download, including the user, title, type and UTC timestamp.
 - Update `golang.org/x/crypto` to v0.58.0.
 - Show only the request poster beside each request; remove wide backdrop banners.
 - Add an administrator-only Delete button for manually removing any request from the stored list.

@@ -307,11 +307,23 @@ func TestMountDownloadAndSymlinkEscape(t *testing.T) {
 	os.Symlink(outside, filepath.Join(root, "escape.mkv"))
 	a.cfg.SourceMode = "mount"
 	a.cfg.SourcePrefix = "/source"
-	a.catalog = Catalog{SourceURL: a.cfg.EmbyURL, Items: []Item{{ID: "1", Path: "/source/movie.mkv"}, {ID: "2", Path: "/source/escape.mkv"}, {ID: "3", Path: "/etc/passwd"}}}
+	a.cfg.AdminEmail = "admin@example.com"
+	a.cfg.SMTPHost = "smtp.example.com"
+	a.cfg.SMTPPort = 587
+	a.cfg.SMTPFrom = "vloader@example.com"
+	a.catalog = Catalog{SourceURL: a.cfg.EmbyURL, Items: []Item{{ID: "1", Name: "Movie", Type: "Movie", Path: "/source/movie.mkv"}, {ID: "2", Path: "/source/escape.mkv"}, {ID: "3", Path: "/etc/passwd"}}}
 	a.sessions["key"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	w := request(a, "GET", "/api/download/1", "", "", "key")
 	if w.Code != 200 || w.Body.String() != "movie-data" || !strings.HasPrefix(w.Header().Get("Content-Disposition"), "attachment") {
 		t.Fatal(w.Code, w.Body.String())
+	}
+	select {
+	case notice := <-a.downloadNotifications:
+		if notice.User != "admin" || notice.Title != "Movie" || notice.MediaType != "Movie" || notice.StartedAt.IsZero() {
+			t.Fatalf("unexpected download notification: %+v", notice)
+		}
+	default:
+		t.Fatal("download notification was not queued")
 	}
 	for _, id := range []string{"2", "3"} {
 		w = request(a, "GET", "/api/download/"+id, "", "", "key")

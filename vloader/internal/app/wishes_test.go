@@ -98,13 +98,13 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	cfg := Config{SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com", SMTPDisableTLS: true}
-	wish := Wish{RequesterEmail: "viewer@example.com", Title: "Requested Film", Type: "Movie"}
-	if err := sendWishAvailableNotification(cfg, "https://vloader.example.com", wish); err != nil {
+	cfg := Config{AdminEmail: "admin@example.com", SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com", SMTPDisableTLS: true}
+	notice := downloadNotice{User: "Viewer Name", Title: "Requested Film", MediaType: "Movie", StartedAt: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)}
+	if err := sendDownloadNotification(cfg, "https://vloader.example.com", notice); err != nil {
 		t.Fatalf("plain SMTP send failed: %v", err)
 	}
 	got := <-result
-	if got.err != nil || got.recipient != "<viewer@example.com>" || !strings.Contains(got.message, "Requested Film") || !strings.Contains(got.message, "available in Emby") {
+	if got.err != nil || got.recipient != "<admin@example.com>" || !strings.Contains(got.message, "Requested Film") || !strings.Contains(got.message, "Viewer Name") || !strings.Contains(got.message, "Download started") {
 		t.Fatalf("plain SMTP server result = %#v", got)
 	}
 }

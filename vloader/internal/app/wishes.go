@@ -460,6 +460,25 @@ func (a *App) notificationWorker() {
 	}
 }
 
+func (a *App) enqueueDownloadNotice(cfg Config, notice downloadNotice) {
+	if cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" || (cfg.SMTPUsername != "" && cfg.SMTPPassword == "") {
+		return
+	}
+	select {
+	case a.downloadNotifications <- notice:
+	default:
+		log.Printf("vloader: email notification queue is full; download alert for %q was not queued", notice.Title)
+	}
+}
+
+func (a *App) downloadNotificationWorker() {
+	for notice := range a.downloadNotifications {
+		if err := sendDownloadNotification(a.config(), a.origin, notice); err != nil {
+			log.Printf("vloader: could not email admin about download for %q: %v", notice.Title, err)
+		}
+	}
+}
+
 func redactRequesterEmail(message, email string) string {
 	if email == "" {
 		return message
@@ -522,6 +541,17 @@ func sendWishNotification(cfg Config, appURL string, wish Wish) error {
 	requester = strings.NewReplacer("\r", " ", "\n", " ").Replace(requester)
 	body := fmt.Sprintf("A new vloader request was submitted.\r\n\r\nTitle: %s\r\nType: %s\r\nRequested by: %s\r\nSource: %s %s\r\n\r\nReview requests: %s\r\n", title, wish.Type, requester, wish.Source, wish.ExternalID, strings.TrimRight(appURL, "/")+"/")
 	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] New "+wish.Type+" request", body)
+}
+
+func sendDownloadNotification(cfg Config, appURL string, notice downloadNotice) error {
+	if cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" || (cfg.SMTPUsername != "" && cfg.SMTPPassword == "") {
+		return nil
+	}
+	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.Title)
+	user := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.User)
+	mediaType := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.MediaType)
+	body := fmt.Sprintf("A vloader download was started.\r\n\r\nTitle: %s\r\nType: %s\r\nUser: %s\r\nTime (UTC): %s\r\n\r\nOpen vloader: %s\r\n", title, mediaType, user, notice.StartedAt.UTC().Format(time.RFC3339), strings.TrimRight(appURL, "/")+"/")
+	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] Download started: "+title, body)
 }
 
 func sendTestEmail(cfg Config) error {

@@ -112,7 +112,7 @@ Request cards show the selected poster and details returned by Radarr or Sonarr.
 
 Configure the administrator email address and SMTP server under **Settings → Email notifications**. Save the settings and use **Send test email** to verify delivery.
 
-vloader emails administrators when a user submits a request. It emails the requester when an Emby sync finds the requested title. Requester emails are accepted only from a verified OIDC `email` claim and are never returned by the API. SMTP uses STARTTLS with certificate validation by default; disabling TLS is intended only for a trusted plain-SMTP relay.
+vloader emails administrators when a user submits a request or starts a download. Download alerts include the user, media title, type and UTC timestamp. It emails the requester when an Emby sync finds the requested title. Requester emails are accepted only from a verified OIDC `email` claim and are never returned by the API. SMTP uses STARTTLS with certificate validation by default; disabling TLS is intended only for a trusted plain-SMTP relay.
 
 ### External sync API
 

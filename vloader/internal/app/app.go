@@ -136,6 +136,12 @@ type Wish struct {
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
 }
+type downloadNotice struct {
+	User      string
+	Title     string
+	MediaType string
+	StartedAt time.Time
+}
 type session struct {
 	User        string
 	DisplayName string
@@ -158,6 +164,7 @@ type App struct {
 	wishMetadata            map[string]wishMetadataCache
 	availabilityEmailQueued map[string]bool
 	notifications           chan Wish
+	downloadNotifications   chan downloadNotice
 	sessions                map[string]session
 	roles                   map[string]string
 	flows                   map[string]flow
@@ -192,12 +199,13 @@ func Run() {
 		log.Fatal(e)
 	}
 	go a.notificationWorker()
+	go a.downloadNotificationWorker()
 	s := &http.Server{Addr: ":8080", Handler: a.Handler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	log.Print("vloader listening on :8080")
 	log.Fatal(s.ListenAndServe())
 }
 func New() (*App, error) {
-	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, wishMetadata: map[string]wishMetadataCache{}, availabilityEmailQueued: map[string]bool{}, notifications: make(chan Wish, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, wishMetadata: map[string]wishMetadataCache{}, availabilityEmailQueued: map[string]bool{}, notifications: make(chan Wish, 64), downloadNotifications: make(chan downloadNotice, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
 	if !path.IsAbs(a.data) || a.data == "/" || a.data == a.mediaRoot || strings.HasPrefix(a.data, a.mediaRoot+"/") || strings.HasPrefix(a.mediaRoot, a.data+"/") {
 		return nil, errors.New("DATA_DIR must be an absolute path separate from the /media source mount")
 	}
@@ -1340,6 +1348,7 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "File not found")
 		return
 	}
+	a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 	if c.SourceMode == "mount" {
 		rel, e := relativeSource(c.SourcePrefix, item.Path)
 		if e != nil {
