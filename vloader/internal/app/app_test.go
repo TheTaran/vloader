@@ -238,7 +238,7 @@ func TestNotificationSettingsAreAdminOnlyAndPersistWithoutLeakingSecret(t *testi
 	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
 	sessionRoles.Store("user-session", "user")
 	t.Cleanup(func() { sessionRoles.Delete("user-session") })
-	body := `{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPUsername":"mailer","SMTPPassword":"mail-secret","SMTPFrom":"vloader@example.com","SMTPDisableTLS":true}`
+	body := `{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPUsername":"mailer","SMTPPassword":"mail-secret","SMTPFrom":"vloader@example.com","SMTPDisableTLS":true,"SlackWebhookURL":"https://hooks.slack.com/services/T000/B000/secret","NotifyRequestsEmail":true,"NotifyDownloadsEmail":true,"NotifyAvailableEmail":true,"NotifyRequestsSlack":true,"NotifyDownloadsSlack":true,"NotifyAvailableSlack":true}`
 	if w := request(a, "POST", "/api/settings/notifications", body, a.origin, "user-session"); w.Code != http.StatusForbidden {
 		t.Fatalf("non-admin could change email settings: %d %s", w.Code, w.Body.String())
 	}
@@ -246,11 +246,11 @@ func TestNotificationSettingsAreAdminOnlyAndPersistWithoutLeakingSecret(t *testi
 		t.Fatalf("admin save failed: %d %s", w.Code, w.Body.String())
 	}
 	w := request(a, "GET", "/api/settings", "", "", "admin-session")
-	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "mail-secret") || !strings.Contains(w.Body.String(), `"HasSMTPPassword":true`) || !strings.Contains(w.Body.String(), `"SMTPDisableTLS":true`) || !strings.Contains(w.Body.String(), `"OIDCCallbackURL":"http://localhost:8090/auth/callback"`) {
+	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "mail-secret") || strings.Contains(w.Body.String(), "hooks.slack.com/services/T000/B000/secret") || !strings.Contains(w.Body.String(), `"HasSMTPPassword":true`) || !strings.Contains(w.Body.String(), `"HasSlackWebhook":true`) || !strings.Contains(w.Body.String(), `"NotifyDownloadsSlack":true`) || !strings.Contains(w.Body.String(), `"SMTPDisableTLS":true`) || !strings.Contains(w.Body.String(), `"OIDCCallbackURL":"http://localhost:8090/auth/callback"`) {
 		t.Fatalf("settings response leaked or omitted secret indicator: %d %s", w.Code, w.Body.String())
 	}
 	b, err := os.ReadFile(filepath.Join(a.data, "settings.json"))
-	if err != nil || !strings.Contains(string(b), `"SMTPPassword":"mail-secret"`) || !strings.Contains(string(b), `"SMTPDisableTLS":true`) {
+	if err != nil || !strings.Contains(string(b), `"SMTPPassword":"mail-secret"`) || !strings.Contains(string(b), `"SlackWebhookURL":"https://hooks.slack.com/services/T000/B000/secret"`) || !strings.Contains(string(b), `"NotifyAvailableSlack":true`) || !strings.Contains(string(b), `"SMTPDisableTLS":true`) {
 		t.Fatalf("notification settings were not persisted: %v %s", err, b)
 	}
 }
@@ -259,11 +259,26 @@ func TestNotificationSettingsRejectInvalidEmailAndHost(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	for _, body := range []string{
-		`{"AdminEmail":"bad","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPFrom":"vloader@example.com"}`,
-		`{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com\r\nRCPT TO:attacker@example.com","SMTPPort":587,"SMTPFrom":"vloader@example.com"}`,
+		`{"AdminEmail":"bad","SMTPHost":"smtp.example.com","SMTPPort":587,"SMTPFrom":"vloader@example.com","NotifyRequestsEmail":true}`,
+		`{"AdminEmail":"admin@example.com","SMTPHost":"smtp.example.com\r\nRCPT TO:attacker@example.com","SMTPPort":587,"SMTPFrom":"vloader@example.com","NotifyRequestsEmail":true}`,
+		`{"SlackWebhookURL":"http://hooks.slack.com/services/T000/B000/secret","NotifyRequestsSlack":true}`,
 	} {
 		if w := request(a, "POST", "/api/settings/notifications", body, a.origin, "admin-session"); w.Code != http.StatusBadRequest {
 			t.Fatalf("invalid notification settings accepted: %d %s", w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestSlackWebhookValidation(t *testing.T) {
+	for raw, valid := range map[string]bool{
+		"": true,
+		"https://hooks.slack.com/services/T000/B000/secret": true,
+		"http://hooks.slack.com/services/T000/B000/secret":  false,
+		"https://example.com/services/T000/B000/secret":     false,
+		"https://hooks.slack.com/other/T000/B000/secret":    false,
+	} {
+		if got := validSlackWebhook(raw); got != valid {
+			t.Errorf("validSlackWebhook(%q) = %t, want %t", raw, got, valid)
 		}
 	}
 }

@@ -112,7 +112,7 @@ Request cards show the selected poster and details returned by Radarr or Sonarr.
 
 Configure the administrator email address and SMTP server under **Settings → Email notifications**. Save the settings and use **Send test email** to verify delivery.
 
-vloader emails administrators when a user submits a request or starts a download. Download alerts include the user, media title, type and UTC timestamp. It emails the requester when an Emby sync finds the requested title. Requester emails are accepted only from a verified OIDC `email` claim and are never returned by the API. SMTP uses STARTTLS with certificate validation by default; disabling TLS is intended only for a trusted plain-SMTP relay.
+Under **Settings → Notifications**, configure SMTP and optionally a Slack Incoming Webhook. Choose Email and Slack independently for new requests, started downloads, and titles that become available in Emby. Download alerts include the user, media title, type and UTC timestamp. Requester emails are accepted only from a verified OIDC `email` claim and are never returned by the API. SMTP uses STARTTLS with certificate validation by default; disabling TLS is intended only for a trusted plain-SMTP relay. Slack webhooks must use `https://hooks.slack.com/services/...` and are stored as secrets.
 
 ### External sync API
 

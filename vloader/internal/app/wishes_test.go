@@ -98,7 +98,7 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 	}()
 
 	port := listener.Addr().(*net.TCPAddr).Port
-	cfg := Config{AdminEmail: "admin@example.com", SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com", SMTPDisableTLS: true}
+	cfg := Config{AdminEmail: "admin@example.com", SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com", SMTPDisableTLS: true, NotifyDownloadsEmail: true}
 	notice := downloadNotice{User: "Viewer Name", Title: "Requested Film", MediaType: "Movie", StartedAt: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)}
 	if err := sendDownloadNotification(cfg, "https://vloader.example.com", notice); err != nil {
 		t.Fatalf("plain SMTP send failed: %v", err)

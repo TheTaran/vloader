@@ -33,34 +33,41 @@ import (
 var assets embed.FS
 
 type Config struct {
-	EmbyURL             string
-	APIKey              string
-	SourcePrefix        string
-	SourceMode          string
-	OIDCIssuer          string
-	OIDCClientID        string
-	OIDCClientSecret    string
-	OIDCAllowedSubjects string
-	OIDCAdminSubjects   string
-	OIDCGroupsClaim     string
-	OIDCAllowedGroups   string
-	OIDCAdminGroups     string
-	UpdateOIDC          bool
-	SyncEnabled         bool
-	SyncIntervalMinutes int
-	LatestUpdatesDays   int
-	AdminEmail          string
-	SMTPHost            string
-	SMTPPort            int
-	SMTPDisableTLS      bool
-	SMTPUsername        string
-	SMTPPassword        string
-	SMTPFrom            string
-	RadarrURL           string
-	RadarrAPIKey        string
-	SonarrURL           string
-	SonarrAPIKey        string
-	SyncAPIKeyHash      string
+	EmbyURL              string
+	APIKey               string
+	SourcePrefix         string
+	SourceMode           string
+	OIDCIssuer           string
+	OIDCClientID         string
+	OIDCClientSecret     string
+	OIDCAllowedSubjects  string
+	OIDCAdminSubjects    string
+	OIDCGroupsClaim      string
+	OIDCAllowedGroups    string
+	OIDCAdminGroups      string
+	UpdateOIDC           bool
+	SyncEnabled          bool
+	SyncIntervalMinutes  int
+	LatestUpdatesDays    int
+	AdminEmail           string
+	SMTPHost             string
+	SMTPPort             int
+	SMTPDisableTLS       bool
+	SMTPUsername         string
+	SMTPPassword         string
+	SMTPFrom             string
+	SlackWebhookURL      string
+	NotifyRequestsEmail  bool
+	NotifyRequestsSlack  bool
+	NotifyDownloadsEmail bool
+	NotifyDownloadsSlack bool
+	NotifyAvailableEmail bool
+	NotifyAvailableSlack bool
+	RadarrURL            string
+	RadarrAPIKey         string
+	SonarrURL            string
+	SonarrAPIKey         string
+	SyncAPIKeyHash       string
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
@@ -216,7 +223,7 @@ func New() (*App, error) {
 	if e = os.MkdirAll(a.data, 0700); e != nil {
 		return nil, e
 	}
-	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS"), OIDCAdminSubjects: os.Getenv("OIDC_ADMIN_SUBJECTS"), OIDCGroupsClaim: env("OIDC_GROUPS_CLAIM", "groups"), OIDCAllowedGroups: os.Getenv("OIDC_ALLOWED_GROUPS"), OIDCAdminGroups: os.Getenv("OIDC_ADMIN_GROUPS")}
+	a.cfg = Config{EmbyURL: os.Getenv("EMBY_URL"), APIKey: os.Getenv("EMBY_API_KEY"), SourcePrefix: env("SOURCE_PREFIX", "/media"), SourceMode: env("SOURCE_MODE", "emby"), OIDCIssuer: os.Getenv("OIDC_ISSUER"), OIDCClientID: os.Getenv("OIDC_CLIENT_ID"), OIDCClientSecret: os.Getenv("OIDC_CLIENT_SECRET"), OIDCAllowedSubjects: os.Getenv("OIDC_ALLOWED_SUBJECTS"), OIDCAdminSubjects: os.Getenv("OIDC_ADMIN_SUBJECTS"), OIDCGroupsClaim: env("OIDC_GROUPS_CLAIM", "groups"), OIDCAllowedGroups: os.Getenv("OIDC_ALLOWED_GROUPS"), OIDCAdminGroups: os.Getenv("OIDC_ADMIN_GROUPS"), NotifyRequestsEmail: true, NotifyDownloadsEmail: true, NotifyAvailableEmail: true}
 	if e := loadState(a.data+"/settings.json", &a.cfg); e != nil {
 		return nil, e
 	}
@@ -422,6 +429,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("POST /api/settings/sync-key", a.adminGuard(http.HandlerFunc(a.createSyncAPIKey)))
 	m.Handle("POST /api/settings/sync-key/revoke", a.adminGuard(http.HandlerFunc(a.revokeSyncAPIKey)))
 	m.Handle("POST /api/settings/notifications/test", a.adminGuard(http.HandlerFunc(a.testNotificationSettings)))
+	m.Handle("POST /api/settings/notifications/slack/test", a.adminGuard(http.HandlerFunc(a.testSlackNotificationSettings)))
 	m.Handle("POST /api/sync", a.adminGuard(http.HandlerFunc(a.syncCatalog)))
 	m.HandleFunc("POST /api/external/sync", a.externalSync)
 	m.Handle("GET /api/images/{id}/{kind}", a.guard(http.HandlerFunc(a.image)))
@@ -806,7 +814,7 @@ func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	if claim == "" {
 		claim = "groups"
 	}
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "RadarrURL": c.RadarrURL, "HasRadarrAPIKey": c.RadarrAPIKey != "", "SonarrURL": c.SonarrURL, "HasSonarrAPIKey": c.SonarrAPIKey != "", "HasSyncAPIKey": c.SyncAPIKeyHash != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasSlackWebhook": c.SlackWebhookURL != "", "NotifyRequestsEmail": c.NotifyRequestsEmail, "NotifyRequestsSlack": c.NotifyRequestsSlack, "NotifyDownloadsEmail": c.NotifyDownloadsEmail, "NotifyDownloadsSlack": c.NotifyDownloadsSlack, "NotifyAvailableEmail": c.NotifyAvailableEmail, "NotifyAvailableSlack": c.NotifyAvailableSlack, "RadarrURL": c.RadarrURL, "HasRadarrAPIKey": c.RadarrAPIKey != "", "SonarrURL": c.SonarrURL, "HasSonarrAPIKey": c.SonarrAPIKey != "", "HasSyncAPIKey": c.SyncAPIKeyHash != ""})
 }
 
 func syncAPIKeyHash(key string) string {
@@ -944,13 +952,21 @@ func (a *App) saveDashboardSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		AdminEmail     string `json:"AdminEmail"`
-		SMTPHost       string `json:"SMTPHost"`
-		SMTPPort       int    `json:"SMTPPort"`
-		SMTPDisableTLS bool   `json:"SMTPDisableTLS"`
-		SMTPUsername   string `json:"SMTPUsername"`
-		SMTPPassword   string `json:"SMTPPassword"`
-		SMTPFrom       string `json:"SMTPFrom"`
+		AdminEmail           string `json:"AdminEmail"`
+		SMTPHost             string `json:"SMTPHost"`
+		SMTPPort             int    `json:"SMTPPort"`
+		SMTPDisableTLS       bool   `json:"SMTPDisableTLS"`
+		SMTPUsername         string `json:"SMTPUsername"`
+		SMTPPassword         string `json:"SMTPPassword"`
+		SMTPFrom             string `json:"SMTPFrom"`
+		SlackWebhookURL      string `json:"SlackWebhookURL"`
+		ClearSlackWebhook    bool   `json:"ClearSlackWebhook"`
+		NotifyRequestsEmail  bool   `json:"NotifyRequestsEmail"`
+		NotifyRequestsSlack  bool   `json:"NotifyRequestsSlack"`
+		NotifyDownloadsEmail bool   `json:"NotifyDownloadsEmail"`
+		NotifyDownloadsSlack bool   `json:"NotifyDownloadsSlack"`
+		NotifyAvailableEmail bool   `json:"NotifyAvailableEmail"`
+		NotifyAvailableSlack bool   `json:"NotifyAvailableSlack"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -959,8 +975,9 @@ func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
 	in.SMTPHost = strings.TrimSpace(in.SMTPHost)
 	in.SMTPUsername = strings.TrimSpace(in.SMTPUsername)
 	in.SMTPFrom = strings.TrimSpace(in.SMTPFrom)
-	if in.AdminEmail == "" || !validEmail(in.AdminEmail) || in.SMTPHost == "" || strings.ContainsAny(in.SMTPHost, " /\\\r\n:@") || in.SMTPPort < 1 || in.SMTPPort > 65535 || !validEmail(in.SMTPFrom) || strings.ContainsAny(in.SMTPUsername, "\r\n") || strings.ContainsAny(in.SMTPPassword, "\r\n") {
-		fail(w, http.StatusBadRequest, "Enter a valid admin email, SMTP host and port, and sender email")
+	in.SlackWebhookURL = strings.TrimSpace(in.SlackWebhookURL)
+	if strings.ContainsAny(in.SMTPUsername, "\r\n") || strings.ContainsAny(in.SMTPPassword, "\r\n") || !validSlackWebhook(in.SlackWebhookURL) {
+		fail(w, http.StatusBadRequest, "Enter valid notification settings")
 		return
 	}
 	a.syncMu.Lock()
@@ -973,8 +990,27 @@ func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "Enter the SMTP password when SMTP authentication is enabled")
 		return
 	}
+	emailSelected := in.NotifyRequestsEmail || in.NotifyDownloadsEmail || in.NotifyAvailableEmail
+	if emailSelected && (in.AdminEmail == "" || !validEmail(in.AdminEmail) || in.SMTPHost == "" || strings.ContainsAny(in.SMTPHost, " /\\\r\n:@") || in.SMTPPort < 1 || in.SMTPPort > 65535 || !validEmail(in.SMTPFrom)) {
+		fail(w, http.StatusBadRequest, "Complete the email settings for the selected email notifications")
+		return
+	}
+	if in.ClearSlackWebhook {
+		in.SlackWebhookURL = ""
+	} else if in.SlackWebhookURL == "" {
+		in.SlackWebhookURL = c.SlackWebhookURL
+	}
+	slackSelected := in.NotifyRequestsSlack || in.NotifyDownloadsSlack || in.NotifyAvailableSlack
+	if slackSelected && in.SlackWebhookURL == "" {
+		fail(w, http.StatusBadRequest, "Enter a Slack Incoming Webhook URL for the selected Slack notifications")
+		return
+	}
 	c.AdminEmail, c.SMTPHost, c.SMTPPort, c.SMTPDisableTLS = in.AdminEmail, in.SMTPHost, in.SMTPPort, in.SMTPDisableTLS
 	c.SMTPUsername, c.SMTPPassword, c.SMTPFrom = in.SMTPUsername, in.SMTPPassword, in.SMTPFrom
+	c.SlackWebhookURL = in.SlackWebhookURL
+	c.NotifyRequestsEmail, c.NotifyRequestsSlack = in.NotifyRequestsEmail, in.NotifyRequestsSlack
+	c.NotifyDownloadsEmail, c.NotifyDownloadsSlack = in.NotifyDownloadsEmail, in.NotifyDownloadsSlack
+	c.NotifyAvailableEmail, c.NotifyAvailableSlack = in.NotifyAvailableEmail, in.NotifyAvailableSlack
 	if err := persist(a.data+"/settings.json", c); err != nil {
 		fail(w, http.StatusInternalServerError, "Failed to save notification settings")
 		return
@@ -983,6 +1019,14 @@ func (a *App) saveNotificationSettings(w http.ResponseWriter, r *http.Request) {
 	a.cfg = c
 	a.mu.Unlock()
 	jsonOut(w, map[string]bool{"ok": true})
+}
+
+func validSlackWebhook(raw string) bool {
+	if raw == "" {
+		return true
+	}
+	u, err := url.Parse(raw)
+	return err == nil && u.Scheme == "https" && u.Host == "hooks.slack.com" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && strings.HasPrefix(u.EscapedPath(), "/services/") && len(raw) <= 2048
 }
 
 func (a *App) testNotificationSettings(w http.ResponseWriter, r *http.Request) {
@@ -997,6 +1041,21 @@ func (a *App) testNotificationSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("vloader: SMTP test email sent successfully")
+	jsonOut(w, map[string]bool{"ok": true})
+}
+
+func (a *App) testSlackNotificationSettings(w http.ResponseWriter, r *http.Request) {
+	c := a.config()
+	if c.SlackWebhookURL == "" {
+		fail(w, http.StatusBadRequest, "Save a Slack Incoming Webhook URL before sending a test")
+		return
+	}
+	if err := sendSlackMessage(c, "vloader Slack notifications are working."); err != nil {
+		log.Printf("vloader: Slack test notification failed: %s", redactSlackWebhookError(err.Error(), c.SlackWebhookURL))
+		fail(w, http.StatusBadGateway, "Slack test failed; check the webhook URL and vloader logs")
+		return
+	}
+	log.Printf("vloader: Slack test notification sent successfully")
 	jsonOut(w, map[string]bool{"ok": true})
 }
 

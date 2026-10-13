@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -446,22 +447,38 @@ func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) notificationWorker() {
 	for wish := range a.notifications {
+		cfg := a.config()
 		if wish.Status == "available" {
-			err := sendWishAvailableNotification(a.config(), a.origin, wish)
-			if err != nil {
-				log.Printf("vloader: could not email requester about available request %s: %s", wish.ID, redactRequesterEmail(err.Error(), wish.RequesterEmail))
+			emailSent := !cfg.NotifyAvailableEmail
+			if cfg.NotifyAvailableEmail {
+				err := sendWishAvailableNotification(cfg, a.origin, wish)
+				emailSent = err == nil
+				if err != nil {
+					log.Printf("vloader: could not email requester about available request %s: %s", wish.ID, redactRequesterEmail(err.Error(), wish.RequesterEmail))
+				}
 			}
-			a.finishAvailabilityNotice(wish.ID, err == nil)
+			if cfg.NotifyAvailableSlack {
+				if err := sendSlackMessage(cfg, slackWishMessage("Available in library", wish)); err != nil {
+					log.Printf("vloader: could not send Slack availability notification for request %s: %s", wish.ID, redactSlackWebhookError(err.Error(), cfg.SlackWebhookURL))
+				}
+			}
+			a.finishAvailabilityNotice(wish.ID, emailSent)
 			continue
 		}
-		if err := sendWishNotification(a.config(), a.origin, wish); err != nil {
+		if err := sendWishNotification(cfg, a.origin, wish); err != nil {
 			log.Printf("vloader: could not email admin about request %s: %v", wish.ID, err)
+		}
+		if cfg.NotifyRequestsSlack {
+			if err := sendSlackMessage(cfg, slackWishMessage("New request", wish)); err != nil {
+				log.Printf("vloader: could not send Slack request notification for request %s: %s", wish.ID, redactSlackWebhookError(err.Error(), cfg.SlackWebhookURL))
+			}
 		}
 	}
 }
 
 func (a *App) enqueueDownloadNotice(cfg Config, notice downloadNotice) {
-	if cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" || (cfg.SMTPUsername != "" && cfg.SMTPPassword == "") {
+	emailEnabled := cfg.NotifyDownloadsEmail && cfg.AdminEmail != "" && cfg.SMTPHost != "" && cfg.SMTPPort != 0 && cfg.SMTPFrom != "" && (cfg.SMTPUsername == "" || cfg.SMTPPassword != "")
+	if !emailEnabled && (!cfg.NotifyDownloadsSlack || cfg.SlackWebhookURL == "") {
 		return
 	}
 	select {
@@ -473,8 +490,14 @@ func (a *App) enqueueDownloadNotice(cfg Config, notice downloadNotice) {
 
 func (a *App) downloadNotificationWorker() {
 	for notice := range a.downloadNotifications {
-		if err := sendDownloadNotification(a.config(), a.origin, notice); err != nil {
+		cfg := a.config()
+		if err := sendDownloadNotification(cfg, a.origin, notice); err != nil {
 			log.Printf("vloader: could not email admin about download for %q: %v", notice.Title, err)
+		}
+		if cfg.NotifyDownloadsSlack {
+			if err := sendSlackMessage(cfg, slackDownloadMessage(notice)); err != nil {
+				log.Printf("vloader: could not send Slack download notification for %q: %s", notice.Title, redactSlackWebhookError(err.Error(), cfg.SlackWebhookURL))
+			}
 		}
 	}
 }
@@ -484,6 +507,13 @@ func redactRequesterEmail(message, email string) string {
 		return message
 	}
 	return strings.ReplaceAll(message, email, "[email redacted]")
+}
+
+func redactSlackWebhookError(message, webhook string) string {
+	if webhook == "" {
+		return message
+	}
+	return strings.ReplaceAll(message, webhook, "[Slack webhook redacted]")
 }
 
 func (a *App) enqueueAvailabilityNotice(wish Wish) {
@@ -530,7 +560,7 @@ func sendWishAvailableNotification(cfg Config, appURL string, wish Wish) error {
 }
 
 func sendWishNotification(cfg Config, appURL string, wish Wish) error {
-	if cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" {
+	if !cfg.NotifyRequestsEmail || cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" {
 		return nil
 	}
 	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Title)
@@ -544,7 +574,7 @@ func sendWishNotification(cfg Config, appURL string, wish Wish) error {
 }
 
 func sendDownloadNotification(cfg Config, appURL string, notice downloadNotice) error {
-	if cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" || (cfg.SMTPUsername != "" && cfg.SMTPPassword == "") {
+	if !cfg.NotifyDownloadsEmail || cfg.AdminEmail == "" || cfg.SMTPHost == "" || cfg.SMTPPort == 0 || cfg.SMTPFrom == "" || (cfg.SMTPUsername != "" && cfg.SMTPPassword == "") {
 		return nil
 	}
 	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.Title)
@@ -552,6 +582,47 @@ func sendDownloadNotification(cfg Config, appURL string, notice downloadNotice) 
 	mediaType := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.MediaType)
 	body := fmt.Sprintf("A vloader download was started.\r\n\r\nTitle: %s\r\nType: %s\r\nUser: %s\r\nTime (UTC): %s\r\n\r\nOpen vloader: %s\r\n", title, mediaType, user, notice.StartedAt.UTC().Format(time.RFC3339), strings.TrimRight(appURL, "/")+"/")
 	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] Download started: "+title, body)
+}
+
+func slackWishMessage(event string, wish Wish) string {
+	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.Title)
+	requester := strings.NewReplacer("\r", " ", "\n", " ").Replace(wish.RequesterName)
+	if requester == "" {
+		requester = wish.Requester
+	}
+	return fmt.Sprintf("*vloader — %s*\nTitle: %s\nType: %s\nRequested by: %s", event, title, wish.Type, requester)
+}
+
+func slackDownloadMessage(notice downloadNotice) string {
+	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.Title)
+	user := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.User)
+	mediaType := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.MediaType)
+	return fmt.Sprintf("*vloader — Download started*\nTitle: %s\nType: %s\nUser: %s\nTime (UTC): %s", title, mediaType, user, notice.StartedAt.UTC().Format(time.RFC3339))
+}
+
+func sendSlackMessage(cfg Config, text string) error {
+	if cfg.SlackWebhookURL == "" {
+		return nil
+	}
+	body, err := json.Marshal(map[string]string{"text": text})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, cfg.SlackWebhookURL, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < http.StatusOK || res.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("Slack webhook returned status %d", res.StatusCode)
+	}
+	return nil
 }
 
 func sendTestEmail(cfg Config) error {
