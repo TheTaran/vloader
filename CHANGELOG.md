@@ -1,4 +1,5 @@
 ## Unreleased
+- Update `golang.org/x/crypto` to v0.58.0.
 - Show only the request poster beside each request; remove wide backdrop banners.
 - Add an administrator-only Delete button for manually removing any request from the stored list.
 - Use an in-page vloader confirmation dialog for manual request deletion instead of the browser confirmation popup.
