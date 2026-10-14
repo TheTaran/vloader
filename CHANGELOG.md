@@ -1,4 +1,5 @@
 ## Unreleased
+- Use the configured local server timezone for download notifications and update only the active-download panel while it is open.
 - Separate the user Requests view from a new administrator workspace that lists every request and shows live download sessions with transferred and remaining bytes.
 - Show only the last synchronization time to regular users; keep Emby server and configuration status in the administrator sidebar.
 - Add a vloader application icon and anonymized interface previews to the README.

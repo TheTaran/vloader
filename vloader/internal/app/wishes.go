@@ -588,7 +588,7 @@ func sendDownloadNotification(cfg Config, appURL string, notice downloadNotice) 
 	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.Title)
 	user := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.User)
 	mediaType := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.MediaType)
-	body := fmt.Sprintf("A vloader download was started.\r\n\r\nTitle: %s\r\nType: %s\r\nUser: %s\r\nTime (UTC): %s\r\n\r\nOpen vloader: %s\r\n", title, mediaType, user, notice.StartedAt.UTC().Format(time.RFC3339), strings.TrimRight(appURL, "/")+"/")
+	body := fmt.Sprintf("A vloader download was started.\r\n\r\nTitle: %s\r\nType: %s\r\nUser: %s\r\nTime: %s\r\n\r\nOpen vloader: %s\r\n", title, mediaType, user, notificationTime(notice.StartedAt), strings.TrimRight(appURL, "/")+"/")
 	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] Download started: "+title, body)
 }
 
@@ -605,7 +605,11 @@ func slackDownloadMessage(notice downloadNotice) string {
 	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.Title)
 	user := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.User)
 	mediaType := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.MediaType)
-	return fmt.Sprintf("*vloader — Download started*\nTitle: %s\nType: %s\nUser: %s\nTime (UTC): %s", title, mediaType, user, notice.StartedAt.UTC().Format(time.RFC3339))
+	return fmt.Sprintf("*vloader — Download started*\nTitle: %s\nType: %s\nUser: %s\nTime: %s", title, mediaType, user, notificationTime(notice.StartedAt))
+}
+
+func notificationTime(timestamp time.Time) string {
+	return timestamp.In(time.Local).Format("02.01.2006, 15:04:05")
 }
 
 func sendSlackMessage(cfg Config, text string) error {

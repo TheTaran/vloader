@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       LOCAL_AUTH_ENABLED: ${LOCAL_AUTH_ENABLED:-true}
+      TZ: ${TZ:-Europe/Zurich}
       DATA_DIR: /data
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8090}:8080"

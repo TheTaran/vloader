@@ -160,6 +160,15 @@ type activeDownload struct {
 	TotalBytes  int64     `json:"totalBytes"`
 	LoadedBytes int64     `json:"loadedBytes"`
 }
+type downloadHistoryEntry struct {
+	User      string    `json:"user"`
+	Title     string    `json:"title"`
+	MediaType string    `json:"mediaType"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
+const downloadHistoryLimit = 50
+
 type session struct {
 	User        string
 	DisplayName string
@@ -185,6 +194,7 @@ type App struct {
 	downloadNotifications   chan downloadNotice
 	downloadMu              sync.RWMutex
 	activeDownloads         map[string]*activeDownload
+	downloadHistory         []downloadHistoryEntry
 	sessions                map[string]session
 	roles                   map[string]string
 	flows                   map[string]flow
@@ -255,6 +265,15 @@ func New() (*App, error) {
 	}
 	if e := loadState(a.data+"/wishes.json", &a.wishes); e != nil {
 		return nil, e
+	}
+	if e := loadState(a.data+"/download-history.json", &a.downloadHistory); e != nil {
+		return nil, e
+	}
+	if len(a.downloadHistory) > downloadHistoryLimit {
+		a.downloadHistory = a.downloadHistory[:downloadHistoryLimit]
+		if e := persist(a.data+"/download-history.json", a.downloadHistory); e != nil {
+			return nil, fmt.Errorf("trim download history: %w", e)
+		}
 	}
 	if kept, changed := pruneExpiredWishes(a.wishes, time.Now().UTC()); changed {
 		a.wishes = kept
@@ -428,6 +447,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
 	m.Handle("GET /api/admin/wishes", a.adminGuard(http.HandlerFunc(a.listAdminWishes)))
 	m.Handle("GET /api/admin/downloads", a.adminGuard(http.HandlerFunc(a.listActiveDownloads)))
+	m.Handle("GET /api/admin/download-history", a.adminGuard(http.HandlerFunc(a.listDownloadHistory)))
 	m.Handle("GET /api/wishes/search", a.guard(http.HandlerFunc(a.searchWishes)))
 	m.Handle("GET /api/request-image", a.guard(http.HandlerFunc(a.requestImage)))
 	m.Handle("GET /api/settings/automation/roots", a.adminGuard(http.HandlerFunc(a.automationRoots)))
@@ -1495,8 +1515,16 @@ func (w *downloadResponseWriter) Write(p []byte) (int, error) {
 
 func (a *App) startDownload(user, title, mediaType string, total int64) string {
 	id := random()
+	startedAt := time.Now().UTC()
 	a.downloadMu.Lock()
-	a.activeDownloads[id] = &activeDownload{ID: id, User: user, Title: title, MediaType: mediaType, StartedAt: time.Now().UTC(), TotalBytes: total}
+	a.activeDownloads[id] = &activeDownload{ID: id, User: user, Title: title, MediaType: mediaType, StartedAt: startedAt, TotalBytes: total}
+	a.downloadHistory = append([]downloadHistoryEntry{{User: user, Title: title, MediaType: mediaType, StartedAt: startedAt}}, a.downloadHistory...)
+	if len(a.downloadHistory) > downloadHistoryLimit {
+		a.downloadHistory = a.downloadHistory[:downloadHistoryLimit]
+	}
+	if err := persist(a.data+"/download-history.json", a.downloadHistory); err != nil {
+		log.Printf("vloader: failed to persist download history: %v", err)
+	}
 	a.downloadMu.Unlock()
 	return id
 }
@@ -1524,5 +1552,12 @@ func (a *App) listActiveDownloads(w http.ResponseWriter, _ *http.Request) {
 	}
 	a.downloadMu.RUnlock()
 	slices.SortFunc(items, func(left, right activeDownload) int { return right.StartedAt.Compare(left.StartedAt) })
+	jsonOut(w, map[string]any{"items": items})
+}
+
+func (a *App) listDownloadHistory(w http.ResponseWriter, _ *http.Request) {
+	a.downloadMu.RLock()
+	items := append([]downloadHistoryEntry(nil), a.downloadHistory...)
+	a.downloadMu.RUnlock()
 	jsonOut(w, map[string]any{"items": items})
 }

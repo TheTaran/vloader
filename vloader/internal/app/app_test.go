@@ -108,11 +108,17 @@ func TestActiveDownloadsAreVisibleOnlyToAdministrators(t *testing.T) {
 	if got := request(a, http.MethodGet, "/api/admin/downloads", "", "", "user-session"); got.Code != http.StatusForbidden {
 		t.Fatalf("regular user accessed active downloads: %d %s", got.Code, got.Body.String())
 	}
+	if got := request(a, http.MethodGet, "/api/admin/download-history", "", "", "user-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("regular user accessed download history: %d %s", got.Code, got.Body.String())
+	}
 	got := request(a, http.MethodGet, "/api/admin/downloads", "", "", "admin-session")
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"title":"Example Movie"`) || !strings.Contains(got.Body.String(), `"loadedBytes":40`) || !strings.Contains(got.Body.String(), `"totalBytes":100`) {
 		t.Fatalf("active downloads response: %d %s", got.Code, got.Body.String())
 	}
 	a.finishDownload(id)
+	if got := request(a, http.MethodGet, "/api/admin/download-history", "", "", "admin-session"); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"title":"Example Movie"`) || !strings.Contains(got.Body.String(), `"user":"Viewer"`) {
+		t.Fatalf("download history response: %d %s", got.Code, got.Body.String())
+	}
 }
 
 func request(a *App, method, target, body, origin, cookie string) *httptest.ResponseRecorder {

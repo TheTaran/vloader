@@ -125,7 +125,7 @@ Request cards show the selected poster and details returned by Radarr or Sonarr.
 Open **Settings → Notifications** to configure delivery channels and choose the events for each channel independently:
 
 - New requests
-- Started downloads, including the user, title, media type and UTC timestamp
+- Started downloads, including the user, title, media type and local server timestamp
 - Approved requests that become available in Emby after a sync
 
 For email, enter the administrator address and SMTP settings, save, then use **Send test email**. SMTP uses STARTTLS with certificate validation by default; disabling TLS is intended only for a trusted plain-SMTP relay. Requester availability emails require a verified OIDC `email` claim and are never returned by the API.
@@ -216,6 +216,7 @@ The Docker host needs NFS or CIFS kernel support. Do not mount the media source 
 | `APP_URL` | `http://localhost:8090` | Exact browser origin; required for mutation-origin checks and the OIDC callback URL |
 | `BIND_ADDRESS` | `127.0.0.1` | Host address used for the published HTTP port |
 | `PORT` | `8090` | Host port mapped to vloader |
+| `TZ` | `Europe/Zurich` | IANA timezone used for displayed timestamps and notifications |
 | `ADMIN_PASSWORD` | required | Local administrator password; at least 16 characters when local auth is enabled |
 | `LOCAL_AUTH_ENABLED` | `true` | Enables local administrator sign-in |
 | `VLOADER_DATA_DIR` | `./data` | Host path mounted at `/data` |

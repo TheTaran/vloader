@@ -109,6 +109,20 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 	}
 }
 
+func TestDownloadNotificationsUseLocalSystemTime(t *testing.T) {
+	previousLocation := time.Local
+	time.Local = time.FixedZone("local", 2*60*60)
+	t.Cleanup(func() { time.Local = previousLocation })
+
+	notice := downloadNotice{User: "Viewer", Title: "Example", MediaType: "Movie", StartedAt: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)}
+	if got := notificationTime(notice.StartedAt); got != "13.10.2026, 14:00:00" {
+		t.Fatalf("notification time = %q", got)
+	}
+	if got := slackDownloadMessage(notice); !strings.Contains(got, "Time: 13.10.2026, 14:00:00") || strings.Contains(got, "UTC") {
+		t.Fatalf("slack notification did not use local time: %q", got)
+	}
+}
+
 func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
