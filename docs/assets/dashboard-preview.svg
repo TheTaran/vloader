@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">vloader library dashboard</title>
+  <desc id="description">An anonymized vloader dashboard showing libraries and sample media cards.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1b211d"/><stop offset="1" stop-color="#111612"/></linearGradient>
+    <linearGradient id="posterA" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#31575c"/><stop offset="1" stop-color="#102426"/></linearGradient>
+    <linearGradient id="posterB" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#775348"/><stop offset="1" stop-color="#2d1d28"/></linearGradient>
+    <linearGradient id="posterC" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#565178"/><stop offset="1" stop-color="#1a243f"/></linearGradient>
+    <linearGradient id="posterD" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#5c7148"/><stop offset="1" stop-color="#1e3028"/></linearGradient>
+    <style>
+      .small { font: 13px system-ui, sans-serif; fill: #aab1ac; letter-spacing: 2px; }
+      .nav { font: 18px system-ui, sans-serif; fill: #cfd5d0; }
+      .title { font: 20px system-ui, sans-serif; fill: #f2f5f1; font-weight: 600; }
+      .meta { font: 15px system-ui, sans-serif; fill: #b6bdb8; }
+      .posterText { font: 21px system-ui, sans-serif; fill: #fff; font-weight: 700; letter-spacing: 1px; }
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="#0e1210"/>
+  <rect width="270" height="900" fill="#151a17"/>
+  <path d="M270 0V900" stroke="#304038"/>
+  <rect x="26" y="28" width="44" height="44" rx="11" fill="#c8ff62"/>
+  <path d="M39 42h8l5 15 6-15h8l-11 24h-7z" fill="#172018"/>
+  <text x="84" y="61" class="title" font-size="28">vloader.</text>
+  <text x="26" y="126" class="small">LIBRARIES</text>
+  <rect x="14" y="151" width="242" height="49" rx="8" fill="#263324"/>
+  <text x="39" y="182" class="nav" fill="#d4ff7a">▦  All content</text>
+  <text x="39" y="233" class="nav">▤  Films</text>
+  <text x="39" y="279" class="nav">▤  Series</text>
+  <text x="39" y="325" class="nav">▤  Documentaries</text>
+  <text x="26" y="400" class="small">WORKSPACE</text>
+  <text x="39" y="447" class="nav">⚙  Settings</text>
+  <text x="39" y="493" class="nav">♡  Requests</text>
+  <rect x="22" y="748" width="226" height="104" rx="10" fill="url(#panel)" stroke="#354139"/>
+  <circle cx="39" cy="774" r="5" fill="#c8ff62"/>
+  <text x="54" y="780" class="nav" font-size="15">Emby Server</text>
+  <text x="54" y="804" class="meta" font-size="13">Connected</text>
+  <text x="54" y="829" class="meta" font-size="12">Sample library</text>
+  <text x="320" y="55" class="nav" font-size="16">Demo User</text>
+  <circle cx="445" cy="49" r="18" fill="none" stroke="#7f9e57"/>
+  <path d="M439 46l6 7 6-7" fill="none" stroke="#c8ff62"/>
+  <path d="M320 92H1565" stroke="#303831"/>
+  <text x="320" y="144" class="small">YOUR MEDIA. YOUR ACCESS.</text>
+  <text x="320" y="195" class="title" font-size="28">Latest additions</text>
+  <text x="320" y="225" class="meta">Movies and series added during the selected period.</text>
+  <rect x="1306" y="164" width="258" height="46" rx="8" fill="#151a17" stroke="#3a453d"/>
+  <text x="1330" y="193" class="meta">⌕  Search your collection</text>
+  <g transform="translate(320 270)">
+    <g><rect width="200" height="285" rx="9" fill="url(#posterA)"/><circle cx="100" cy="112" r="53" fill="#75a69d" opacity=".45"/><path d="M35 245L165 39" stroke="#d8ff80" opacity=".55" stroke-width="8"/><text x="30" y="161" class="posterText">NORTH</text><text x="30" y="187" class="posterText">SHORE</text><text x="48" y="319" class="title">North Shore</text><text x="70" y="345" class="meta">2026 · Drama</text></g>
+    <g transform="translate(230)"><rect width="200" height="285" rx="9" fill="url(#posterB)"/><rect x="38" y="38" width="124" height="168" rx="62" fill="#dca77f" opacity=".5"/><path d="M32 231H168" stroke="#fff0d2" opacity=".7" stroke-width="2"/><text x="46" y="159" class="posterText">ORBIT</text><text x="68" y="319" class="title">Orbit</text><text x="61" y="345" class="meta">2025 · Sci‑Fi</text></g>
+    <g transform="translate(460)"><rect width="200" height="285" rx="9" fill="url(#posterC)"/><path d="M20 205L100 30l80 175z" fill="#aab6f6" opacity=".52"/><circle cx="100" cy="134" r="40" fill="#e1e5ff" opacity=".45"/><text x="40" y="250" class="posterText">SIGNAL</text><text x="65" y="319" class="title">Signal</text><text x="61" y="345" class="meta">2026 · Series</text></g>
+    <g transform="translate(690)"><rect width="200" height="285" rx="9" fill="url(#posterD)"/><path d="M30 50c80 20 80 150 140 190" fill="none" stroke="#e5ff9e" opacity=".55" stroke-width="15"/><text x="37" y="154" class="posterText">WILDLAND</text><text x="58" y="319" class="title">Wildland</text><text x="45" y="345" class="meta">2024 · Nature</text></g>
+    <g transform="translate(920)"><rect width="200" height="285" rx="9" fill="url(#posterA)"/><path d="M20 55h160M20 115h160M20 175h160" stroke="#d8ff80" opacity=".35" stroke-width="18"/><text x="37" y="235" class="posterText">ARCHIVE</text><text x="57" y="319" class="title">Archive One</text><text x="50" y="345" class="meta">2025 · Mystery</text></g>
+  </g>
+  <text x="320" y="770" class="small">ANONYMIZED EXAMPLE INTERFACE</text>
+</svg>

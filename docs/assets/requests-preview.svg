@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+  <title id="title">vloader requests page</title>
+  <desc id="description">An anonymized vloader request review page with sample title cards.</desc>
+  <defs>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#1c231e"/><stop offset="1" stop-color="#151a17"/></linearGradient>
+    <linearGradient id="poster1" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#264d5b"/><stop offset="1" stop-color="#14242a"/></linearGradient>
+    <linearGradient id="poster2" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#665036"/><stop offset="1" stop-color="#272217"/></linearGradient>
+    <style>
+      .small { font: 13px system-ui, sans-serif; fill: #aab1ac; letter-spacing: 2px; }
+      .text { font: 17px system-ui, sans-serif; fill: #cbd1cc; }
+      .title { font: 25px system-ui, sans-serif; fill: #f1f5ef; font-weight: 600; }
+      .muted { font: 15px system-ui, sans-serif; fill: #aab3ad; }
+      .button { font: 15px system-ui, sans-serif; fill: #172018; font-weight: 700; }
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="#0e1210"/>
+  <rect width="270" height="900" fill="#151a17"/>
+  <path d="M270 0V900" stroke="#304038"/>
+  <rect x="26" y="28" width="44" height="44" rx="11" fill="#c8ff62"/>
+  <path d="M39 42h8l5 15 6-15h8l-11 24h-7z" fill="#172018"/>
+  <text x="84" y="61" class="title" font-size="28">vloader.</text>
+  <text x="26" y="126" class="small">LIBRARIES</text>
+  <text x="39" y="174" class="text">▦  All content</text>
+  <text x="39" y="220" class="text">▤  Films</text>
+  <text x="39" y="266" class="text">▤  Series</text>
+  <text x="26" y="345" class="small">WORKSPACE</text>
+  <text x="39" y="392" class="text">⚙  Settings</text>
+  <rect x="14" y="414" width="242" height="49" rx="8" fill="#263324"/>
+  <text x="39" y="445" class="text" fill="#d4ff7a">♡  Requests</text>
+  <path d="M320 92H1565" stroke="#303831"/>
+  <text x="320" y="146" class="small">YOUR REQUESTS. YOUR LIBRARY.</text>
+  <text x="320" y="210" class="title" font-size="52">Requests.</text>
+  <text x="320" y="246" class="text">Users ask for a film or series. Administrators review each request.</text>
+  <text x="320" y="325" class="title">All user requests</text>
+  <g transform="translate(320 356)">
+    <rect width="1180" height="210" rx="13" fill="url(#card)" stroke="#344139"/>
+    <rect x="25" y="24" width="112" height="162" rx="8" fill="url(#poster1)"/>
+    <circle cx="81" cy="83" r="34" fill="#a4d9d4" opacity=".45"/><path d="M40 151L121 55" stroke="#d8ff80" stroke-width="7" opacity=".6"/>
+    <text x="164" y="61" class="title">Northern Light</text><text x="164" y="91" class="muted">Movie · Requested by demo user</text>
+    <text x="164" y="126" class="muted">A sample request card with only safe placeholder data.</text>
+    <text x="164" y="158" class="text" fill="#c8ff62">Pending administrator review</text>
+    <rect x="958" y="47" width="94" height="43" rx="8" fill="#c8ff62"/><text x="981" y="74" class="button">Approve</text>
+    <rect x="1066" y="47" width="87" height="43" rx="8" fill="none" stroke="#526055"/><text x="1088" y="74" class="text" font-size="14">Decline</text>
+  </g>
+  <g transform="translate(320 591)">
+    <rect width="1180" height="210" rx="13" fill="url(#card)" stroke="#344139"/>
+    <rect x="25" y="24" width="112" height="162" rx="8" fill="url(#poster2)"/>
+    <path d="M40 48h82v108H40z" fill="#e0bc75" opacity=".32"/><path d="M48 145h66" stroke="#ffe9b9" stroke-width="5" opacity=".55"/>
+    <text x="164" y="61" class="title">The Long Way Home</text><text x="164" y="91" class="muted">Series · Requested by demo user</text>
+    <text x="164" y="126" class="muted">An approved title waits for the next library sync.</text>
+    <text x="164" y="158" class="text" fill="#c8ff62">Approved · waiting for library sync</text>
+    <rect x="1005" y="47" width="148" height="43" rx="8" fill="none" stroke="#526055"/><text x="1029" y="74" class="text" font-size="14">View details</text>
+  </g>
+  <text x="320" y="852" class="small">ANONYMIZED EXAMPLE INTERFACE</text>
+</svg>

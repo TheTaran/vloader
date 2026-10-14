@@ -1,6 +1,13 @@
 # vloader
 
+<p align="center">
+  <img src="docs/assets/vloader-icon.png" width="112" alt="vloader icon">
+</p>
 <p align="center">A web interface for browsing, requesting, and downloading media from an Emby library.</p>
+
+<p align="center">
+  <img src="docs/assets/dashboard-preview.svg" alt="Anonymized vloader library dashboard" width="800">
+</p>
 
 ## Overview
 
@@ -20,6 +27,10 @@ vloader lets you:
 - authenticate with a local administrator account, OIDC, or both
 
 All library data, settings, request state, and credentials are kept in the persistent `/data` volume. The media source is always separate and read-only.
+
+<p align="center">
+  <img src="docs/assets/requests-preview.svg" alt="Anonymized vloader request review page" width="800">
+</p>
 
 ## Quick Start
 

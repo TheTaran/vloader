@@ -1,4 +1,5 @@
 ## Unreleased
+- Add a vloader application icon and anonymized interface previews to the README.
 
 ## v0.2.7
 - Add Slack Incoming Webhook notifications with separate Email and Slack controls for requests, downloads and newly available titles.
