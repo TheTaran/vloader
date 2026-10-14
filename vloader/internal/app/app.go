@@ -20,6 +20,8 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -149,6 +151,15 @@ type downloadNotice struct {
 	MediaType string
 	StartedAt time.Time
 }
+type activeDownload struct {
+	ID          string    `json:"id"`
+	User        string    `json:"user"`
+	Title       string    `json:"title"`
+	MediaType   string    `json:"mediaType"`
+	StartedAt   time.Time `json:"startedAt"`
+	TotalBytes  int64     `json:"totalBytes"`
+	LoadedBytes int64     `json:"loadedBytes"`
+}
 type session struct {
 	User        string
 	DisplayName string
@@ -172,6 +183,8 @@ type App struct {
 	availabilityEmailQueued map[string]bool
 	notifications           chan Wish
 	downloadNotifications   chan downloadNotice
+	downloadMu              sync.RWMutex
+	activeDownloads         map[string]*activeDownload
 	sessions                map[string]session
 	roles                   map[string]string
 	flows                   map[string]flow
@@ -212,7 +225,7 @@ func Run() {
 	log.Fatal(s.ListenAndServe())
 }
 func New() (*App, error) {
-	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, wishMetadata: map[string]wishMetadataCache{}, availabilityEmailQueued: map[string]bool{}, notifications: make(chan Wish, 64), downloadNotifications: make(chan downloadNotice, 64), client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
+	a := &App{data: path.Clean(env("DATA_DIR", "/data")), mediaRoot: "/media", origin: env("APP_URL", "http://localhost:8090"), version: env("APP_VERSION", "dev"), sessions: map[string]session{}, flows: map[string]flow{}, attempts: map[string]time.Time{}, wishMetadata: map[string]wishMetadataCache{}, availabilityEmailQueued: map[string]bool{}, notifications: make(chan Wish, 64), downloadNotifications: make(chan downloadNotice, 64), activeDownloads: map[string]*activeDownload{}, client: &http.Client{Timeout: 60 * time.Second, Transport: &http.Transport{Proxy: http.ProxyFromEnvironment, ResponseHeaderTimeout: 30 * time.Second, TLSHandshakeTimeout: 10 * time.Second, IdleConnTimeout: 90 * time.Second, MaxIdleConns: 20}, CheckRedirect: func(r *http.Request, v []*http.Request) error { return http.ErrUseLastResponse }}}
 	if !path.IsAbs(a.data) || a.data == "/" || a.data == a.mediaRoot || strings.HasPrefix(a.data, a.mediaRoot+"/") || strings.HasPrefix(a.mediaRoot, a.data+"/") {
 		return nil, errors.New("DATA_DIR must be an absolute path separate from the /media source mount")
 	}
@@ -413,6 +426,8 @@ func (a *App) Handler() http.Handler {
 		jsonOut(w, catalogForClient(a.catalog))
 	})))
 	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
+	m.Handle("GET /api/admin/wishes", a.adminGuard(http.HandlerFunc(a.listAdminWishes)))
+	m.Handle("GET /api/admin/downloads", a.adminGuard(http.HandlerFunc(a.listActiveDownloads)))
 	m.Handle("GET /api/wishes/search", a.guard(http.HandlerFunc(a.searchWishes)))
 	m.Handle("GET /api/request-image", a.guard(http.HandlerFunc(a.requestImage)))
 	m.Handle("GET /api/settings/automation/roots", a.adminGuard(http.HandlerFunc(a.automationRoots)))
@@ -569,7 +584,8 @@ func (a *App) adminGuard(h http.Handler) http.Handler {
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
 	user := a.user(r)
 	name := a.displayNameForUser(user)
-	jsonOut(w, map[string]any{"user": name, "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth, "requesterEmailAvailable": a.emailForUser(user) != "", "latestUpdatesDays": a.config().LatestUpdatesDays})
+	c := a.config()
+	jsonOut(w, map[string]any{"user": name, "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth, "requesterEmailAvailable": a.emailForUser(user) != "", "latestUpdatesDays": c.LatestUpdatesDays, "embyConfigured": c.EmbyURL != ""})
 }
 func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role, displayName, email string) {
 	a.mu.Lock()
@@ -1407,7 +1423,6 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 		fail(w, 404, "File not found")
 		return
 	}
-	a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 	if c.SourceMode == "mount" {
 		rel, e := relativeSource(c.SourcePrefix, item.Path)
 		if e != nil {
@@ -1433,8 +1448,11 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 			fail(w, 404, "Not a regular file")
 			return
 		}
+		downloadID := a.startDownload(a.displayNameForUser(a.user(r)), item.Name, item.Type, info.Size())
+		defer a.finishDownload(downloadID)
+		a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
-		http.ServeContent(w, r, info.Name(), info.ModTime(), file)
+		http.ServeContent(&downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}, r, info.Name(), info.ModTime(), file)
 		return
 	}
 	res, e := a.emby(r.Context(), c, "/Items/"+url.PathEscape(item.ID)+"/Download")
@@ -1447,12 +1465,64 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	if name == "." || name == "/" || name == "" {
 		name = item.Name
 	}
+	total, _ := strconv.ParseInt(res.Header.Get("Content-Length"), 10, 64)
+	downloadID := a.startDownload(a.displayNameForUser(a.user(r)), item.Name, item.Type, total)
+	defer a.finishDownload(downloadID)
+	a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if n := res.Header.Get("Content-Length"); n != "" {
 		w.Header().Set("Content-Length", n)
 	}
-	if _, err := io.Copy(w, res.Body); err != nil && !errors.Is(err, context.Canceled) {
+	if _, err := io.Copy(&downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}, res.Body); err != nil && !errors.Is(err, context.Canceled) {
 		log.Printf("vloader: download transfer failed: %v", err)
 	}
+}
+
+type downloadResponseWriter struct {
+	http.ResponseWriter
+	app *App
+	id  string
+}
+
+func (w *downloadResponseWriter) Write(p []byte) (int, error) {
+	n, err := w.ResponseWriter.Write(p)
+	if n > 0 {
+		w.app.addDownloadedBytes(w.id, int64(n))
+	}
+	return n, err
+}
+
+func (a *App) startDownload(user, title, mediaType string, total int64) string {
+	id := random()
+	a.downloadMu.Lock()
+	a.activeDownloads[id] = &activeDownload{ID: id, User: user, Title: title, MediaType: mediaType, StartedAt: time.Now().UTC(), TotalBytes: total}
+	a.downloadMu.Unlock()
+	return id
+}
+
+func (a *App) addDownloadedBytes(id string, bytes int64) {
+	a.downloadMu.Lock()
+	if download := a.activeDownloads[id]; download != nil {
+		download.LoadedBytes += bytes
+	}
+	a.downloadMu.Unlock()
+}
+
+func (a *App) finishDownload(id string) {
+	a.downloadMu.Lock()
+	delete(a.activeDownloads, id)
+	a.downloadMu.Unlock()
+}
+
+func (a *App) listActiveDownloads(w http.ResponseWriter, _ *http.Request) {
+	a.downloadMu.RLock()
+	items := make([]activeDownload, 0, len(a.activeDownloads))
+	for _, download := range a.activeDownloads {
+		copy := *download
+		items = append(items, copy)
+	}
+	a.downloadMu.RUnlock()
+	slices.SortFunc(items, func(left, right activeDownload) int { return right.StartedAt.Compare(left.StartedAt) })
+	jsonOut(w, map[string]any{"items": items})
 }

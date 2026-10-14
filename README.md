@@ -22,6 +22,7 @@ vloader lets you:
 - use a responsive interface on phones, tablets, and desktop browsers
 - request movies and series through Radarr and Sonarr search
 - approve requests with an administrator-selected destination folder
+- review all requests and monitor active download progress in a dedicated administrator workspace
 - notify administrators about new requests and requesters when a title becomes available in Emby
 - trigger a library sync from a Radarr or Sonarr webhook
 - authenticate with a local administrator account, OIDC, or both
@@ -115,7 +116,7 @@ vloader preserves library and item IDs, parent relationships, descriptions, rele
 
 Configure the Radarr and Sonarr URLs and API keys under **Settings → Automation**. Users then search the matching service from **Requests** and select the exact movie or series. This creates a pending request only.
 
-An administrator sees every request, selects a destination folder and quality profile returned by Radarr or Sonarr, and approves or declines it. Where Sonarr provides language profiles, the administrator selects one of those too. On approval, vloader sends the selected title and choices to the matching service. Root folders and profiles remain managed by Radarr and Sonarr; their API keys never reach the browser.
+An administrator sees every request in the dedicated **Admin** workspace, selects a destination folder and quality profile returned by Radarr or Sonarr, and approves or declines it. The same workspace lists active browser downloads with the user, title, bytes transferred, and remaining size. Where Sonarr provides language profiles, the administrator selects one of those too. On approval, vloader sends the selected title and choices to the matching service. Root folders and profiles remain managed by Radarr and Sonarr; their API keys never reach the browser.
 
 Request cards show the selected poster and details returned by Radarr or Sonarr. During each Emby sync, vloader checks approved requests against the mirrored library. When it finds a match, the request becomes available and exposes its download action.
 

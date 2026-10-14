@@ -132,9 +132,10 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		cookie string
+		path   string
 		count  int
-	}{{"user-session", 1}, {"admin-session", 1}} {
-		listed := request(a, http.MethodGet, "/api/wishes", "", "", tc.cookie)
+	}{{"user-session", "/api/wishes", 1}, {"admin-session", "/api/admin/wishes", 1}, {"admin-session", "/api/wishes", 0}} {
+		listed := request(a, http.MethodGet, tc.path, "", "", tc.cookie)
 		var response struct {
 			Items []Wish `json:"items"`
 		}
@@ -144,7 +145,7 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 		if strings.Contains(listed.Body.String(), "viewer@example.com") {
 			t.Fatal("request list exposed the requester's email address")
 		}
-		if tc.cookie == "admin-session" && response.Items[0].RequesterName != "Viewer Name" {
+		if tc.path == "/api/admin/wishes" && response.Items[0].RequesterName != "Viewer Name" {
 			t.Fatalf("admin sees requester name %q, want display name", response.Items[0].RequesterName)
 		}
 	}

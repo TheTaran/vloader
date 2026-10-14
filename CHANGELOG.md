@@ -1,4 +1,6 @@
 ## Unreleased
+- Separate the user Requests view from a new administrator workspace that lists every request and shows live download sessions with transferred and remaining bytes.
+- Show only the last synchronization time to regular users; keep Emby server and configuration status in the administrator sidebar.
 - Add a vloader application icon and anonymized interface previews to the README.
 
 ## v0.2.7

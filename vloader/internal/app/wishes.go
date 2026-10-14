@@ -41,8 +41,16 @@ type wishMetadataCache struct {
 }
 
 func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
+	a.listWishesFor(w, r, false)
+}
+
+func (a *App) listAdminWishes(w http.ResponseWriter, r *http.Request) {
+	a.listWishesFor(w, r, true)
+}
+
+func (a *App) listWishesFor(w http.ResponseWriter, r *http.Request, includeAll bool) {
 	a.pruneExpiredWishes()
-	user, admin := a.user(r), a.role(r) == "admin"
+	user := a.user(r)
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	displayNames := make(map[string]string, len(a.sessions))
@@ -53,7 +61,7 @@ func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
 	}
 	items := make([]Wish, 0, len(a.wishes))
 	for _, wish := range a.wishes {
-		if admin || wish.Requester == user {
+		if includeAll || wish.Requester == user {
 			if wish.RequesterName == "" {
 				wish.RequesterName = displayNames[wish.Requester]
 			}
@@ -63,7 +71,7 @@ func (a *App) listWishes(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	arrEnabled := a.cfg.RadarrURL != "" || a.cfg.SonarrURL != ""
-	jsonOut(w, map[string]any{"items": items, "admin": admin, "metadataEnabled": arrEnabled, "tmdbEnabled": false, "tvdbEnabled": false})
+	jsonOut(w, map[string]any{"items": items, "admin": includeAll, "metadataEnabled": arrEnabled, "tmdbEnabled": false, "tvdbEnabled": false})
 }
 
 func (a *App) getWishMetadata(w http.ResponseWriter, r *http.Request) {

@@ -79,6 +79,42 @@ func TestLatestUpdatesPeriodIsSavedAndValidated(t *testing.T) {
 		t.Fatalf("connection save did not preserve dashboard period: status=%d days=%d body=%s", w.Code, a.cfg.LatestUpdatesDays, w.Body.String())
 	}
 }
+
+func TestSessionReportsEmbyConfigurationWithoutExposingURL(t *testing.T) {
+	a := testApp(t)
+	a.cfg.EmbyURL = "https://emby.example.test"
+	a.sessions["user-session"] = session{User: "user", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+
+	got := request(a, http.MethodGet, "/api/session", "", "", "user-session")
+	if got.Code != http.StatusOK {
+		t.Fatalf("session status: %d %s", got.Code, got.Body.String())
+	}
+	if !strings.Contains(got.Body.String(), `"embyConfigured":true`) || strings.Contains(got.Body.String(), "emby.example.test") {
+		t.Fatalf("session did not safely report Emby configuration: %s", got.Body.String())
+	}
+}
+
+func TestActiveDownloadsAreVisibleOnlyToAdministrators(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+
+	id := a.startDownload("Viewer", "Example Movie", "Movie", 100)
+	a.addDownloadedBytes(id, 40)
+	if got := request(a, http.MethodGet, "/api/admin/downloads", "", "", "user-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("regular user accessed active downloads: %d %s", got.Code, got.Body.String())
+	}
+	got := request(a, http.MethodGet, "/api/admin/downloads", "", "", "admin-session")
+	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"title":"Example Movie"`) || !strings.Contains(got.Body.String(), `"loadedBytes":40`) || !strings.Contains(got.Body.String(), `"totalBytes":100`) {
+		t.Fatalf("active downloads response: %d %s", got.Code, got.Body.String())
+	}
+	a.finishDownload(id)
+}
+
 func request(a *App, method, target, body, origin, cookie string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, target, strings.NewReader(body))
 	if origin != "" {
