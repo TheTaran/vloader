@@ -161,10 +161,15 @@ type activeDownload struct {
 	LoadedBytes int64     `json:"loadedBytes"`
 }
 type downloadHistoryEntry struct {
-	User      string    `json:"user"`
-	Title     string    `json:"title"`
-	MediaType string    `json:"mediaType"`
-	StartedAt time.Time `json:"startedAt"`
+	ID          string    `json:"id"`
+	User        string    `json:"user"`
+	Title       string    `json:"title"`
+	MediaType   string    `json:"mediaType"`
+	StartedAt   time.Time `json:"startedAt"`
+	FinishedAt  time.Time `json:"finishedAt"`
+	TotalBytes  int64     `json:"totalBytes"`
+	LoadedBytes int64     `json:"loadedBytes"`
+	Status      string    `json:"status"`
 }
 
 const downloadHistoryLimit = 50
@@ -269,10 +274,28 @@ func New() (*App, error) {
 	if e := loadState(a.data+"/download-history.json", &a.downloadHistory); e != nil {
 		return nil, e
 	}
+	historyChanged := false
+	for i := range a.downloadHistory {
+		if a.downloadHistory[i].ID == "" {
+			a.downloadHistory[i].ID = random()
+			historyChanged = true
+		}
+		if a.downloadHistory[i].Status == "" {
+			a.downloadHistory[i].Status = "completed"
+			historyChanged = true
+		}
+		if a.downloadHistory[i].FinishedAt.IsZero() {
+			a.downloadHistory[i].FinishedAt = a.downloadHistory[i].StartedAt
+			historyChanged = true
+		}
+	}
 	if len(a.downloadHistory) > downloadHistoryLimit {
 		a.downloadHistory = a.downloadHistory[:downloadHistoryLimit]
+		historyChanged = true
+	}
+	if historyChanged {
 		if e := persist(a.data+"/download-history.json", a.downloadHistory); e != nil {
-			return nil, fmt.Errorf("trim download history: %w", e)
+			return nil, fmt.Errorf("migrate download history: %w", e)
 		}
 	}
 	if kept, changed := pruneExpiredWishes(a.wishes, time.Now().UTC()); changed {
@@ -448,6 +471,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("GET /api/admin/wishes", a.adminGuard(http.HandlerFunc(a.listAdminWishes)))
 	m.Handle("GET /api/admin/downloads", a.adminGuard(http.HandlerFunc(a.listActiveDownloads)))
 	m.Handle("GET /api/admin/download-history", a.adminGuard(http.HandlerFunc(a.listDownloadHistory)))
+	m.Handle("POST /api/admin/download-history/{id}/delete", a.adminGuard(http.HandlerFunc(a.deleteDownloadHistory)))
 	m.Handle("GET /api/wishes/search", a.guard(http.HandlerFunc(a.searchWishes)))
 	m.Handle("GET /api/request-image", a.guard(http.HandlerFunc(a.requestImage)))
 	m.Handle("GET /api/settings/automation/roots", a.adminGuard(http.HandlerFunc(a.automationRoots)))
@@ -1469,10 +1493,11 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		downloadID := a.startDownload(a.displayNameForUser(a.user(r)), item.Name, item.Type, info.Size())
-		defer a.finishDownload(downloadID)
+		downloadWriter := &downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}
+		defer func() { a.finishDownload(downloadID, downloadWriter.err != nil || r.Context().Err() != nil) }()
 		a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
-		http.ServeContent(&downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}, r, info.Name(), info.ModTime(), file)
+		http.ServeContent(downloadWriter, r, info.Name(), info.ModTime(), file)
 		return
 	}
 	res, e := a.emby(r.Context(), c, "/Items/"+url.PathEscape(item.ID)+"/Download")
@@ -1487,15 +1512,22 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	}
 	total, _ := strconv.ParseInt(res.Header.Get("Content-Length"), 10, 64)
 	downloadID := a.startDownload(a.displayNameForUser(a.user(r)), item.Name, item.Type, total)
-	defer a.finishDownload(downloadID)
+	downloadWriter := &downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}
+	cancelled := false
+	defer func() {
+		a.finishDownload(downloadID, cancelled || downloadWriter.err != nil || r.Context().Err() != nil)
+	}()
 	a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if n := res.Header.Get("Content-Length"); n != "" {
 		w.Header().Set("Content-Length", n)
 	}
-	if _, err := io.Copy(&downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}, res.Body); err != nil && !errors.Is(err, context.Canceled) {
-		log.Printf("vloader: download transfer failed: %v", err)
+	if _, err := io.Copy(downloadWriter, res.Body); err != nil {
+		cancelled = true
+		if !errors.Is(err, context.Canceled) {
+			log.Printf("vloader: download transfer failed: %v", err)
+		}
 	}
 }
 
@@ -1503,10 +1535,14 @@ type downloadResponseWriter struct {
 	http.ResponseWriter
 	app *App
 	id  string
+	err error
 }
 
 func (w *downloadResponseWriter) Write(p []byte) (int, error) {
 	n, err := w.ResponseWriter.Write(p)
+	if err != nil {
+		w.err = err
+	}
 	if n > 0 {
 		w.app.addDownloadedBytes(w.id, int64(n))
 	}
@@ -1518,13 +1554,6 @@ func (a *App) startDownload(user, title, mediaType string, total int64) string {
 	startedAt := time.Now().UTC()
 	a.downloadMu.Lock()
 	a.activeDownloads[id] = &activeDownload{ID: id, User: user, Title: title, MediaType: mediaType, StartedAt: startedAt, TotalBytes: total}
-	a.downloadHistory = append([]downloadHistoryEntry{{User: user, Title: title, MediaType: mediaType, StartedAt: startedAt}}, a.downloadHistory...)
-	if len(a.downloadHistory) > downloadHistoryLimit {
-		a.downloadHistory = a.downloadHistory[:downloadHistoryLimit]
-	}
-	if err := persist(a.data+"/download-history.json", a.downloadHistory); err != nil {
-		log.Printf("vloader: failed to persist download history: %v", err)
-	}
 	a.downloadMu.Unlock()
 	return id
 }
@@ -1537,9 +1566,24 @@ func (a *App) addDownloadedBytes(id string, bytes int64) {
 	a.downloadMu.Unlock()
 }
 
-func (a *App) finishDownload(id string) {
+func (a *App) finishDownload(id string, cancelled bool) {
 	a.downloadMu.Lock()
+	download := a.activeDownloads[id]
 	delete(a.activeDownloads, id)
+	if download != nil {
+		status := "completed"
+		if cancelled {
+			status = "cancelled"
+		}
+		entry := downloadHistoryEntry{ID: id, User: download.User, Title: download.Title, MediaType: download.MediaType, StartedAt: download.StartedAt, FinishedAt: time.Now().UTC(), TotalBytes: download.TotalBytes, LoadedBytes: download.LoadedBytes, Status: status}
+		a.downloadHistory = append([]downloadHistoryEntry{entry}, a.downloadHistory...)
+		if len(a.downloadHistory) > downloadHistoryLimit {
+			a.downloadHistory = a.downloadHistory[:downloadHistoryLimit]
+		}
+		if err := persist(a.data+"/download-history.json", a.downloadHistory); err != nil {
+			log.Printf("vloader: failed to persist download history: %v", err)
+		}
+	}
 	a.downloadMu.Unlock()
 }
 
@@ -1560,4 +1604,30 @@ func (a *App) listDownloadHistory(w http.ResponseWriter, _ *http.Request) {
 	items := append([]downloadHistoryEntry(nil), a.downloadHistory...)
 	a.downloadMu.RUnlock()
 	jsonOut(w, map[string]any{"items": items})
+}
+
+func (a *App) deleteDownloadHistory(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		fail(w, http.StatusNotFound, "Download history entry not found")
+		return
+	}
+	a.downloadMu.Lock()
+	defer a.downloadMu.Unlock()
+	for i, entry := range a.downloadHistory {
+		if entry.ID != id {
+			continue
+		}
+		updated := append([]downloadHistoryEntry(nil), a.downloadHistory[:i]...)
+		updated = append(updated, a.downloadHistory[i+1:]...)
+		if err := persist(a.data+"/download-history.json", updated); err != nil {
+			log.Printf("vloader: failed to persist deleted download history entry: %v", err)
+			fail(w, http.StatusInternalServerError, "Could not delete download history entry")
+			return
+		}
+		a.downloadHistory = updated
+		jsonOut(w, map[string]bool{"deleted": true})
+		return
+	}
+	fail(w, http.StatusNotFound, "Download history entry not found")
 }

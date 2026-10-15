@@ -1,4 +1,10 @@
 ## Unreleased
+- Use a native progress element for active downloads so the bar remains visible under vloader's strict Content Security Policy.
+- Render active-download progress bars from the transferred-byte percentage in every supported browser.
+- Record completed and cancelled downloads in the administrator history, including the transferred amount and completion state.
+- Refresh the active-download panel and download history independently while the Admin workspace is open.
+- Let administrators remove individual download-history entries through an in-page confirmation dialog.
+
 - Use the configured local server timezone for download notifications and update only the active-download panel while it is open.
 - Separate the user Requests view from a new administrator workspace that lists every request and shows live download sessions with transferred and remaining bytes.
 - Show only the last synchronization time to regular users; keep Emby server and configuration status in the administrator sidebar.

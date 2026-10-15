@@ -115,9 +115,26 @@ func TestActiveDownloadsAreVisibleOnlyToAdministrators(t *testing.T) {
 	if got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"title":"Example Movie"`) || !strings.Contains(got.Body.String(), `"loadedBytes":40`) || !strings.Contains(got.Body.String(), `"totalBytes":100`) {
 		t.Fatalf("active downloads response: %d %s", got.Code, got.Body.String())
 	}
-	a.finishDownload(id)
-	if got := request(a, http.MethodGet, "/api/admin/download-history", "", "", "admin-session"); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"title":"Example Movie"`) || !strings.Contains(got.Body.String(), `"user":"Viewer"`) {
-		t.Fatalf("download history response: %d %s", got.Code, got.Body.String())
+	a.finishDownload(id, true)
+	history := request(a, http.MethodGet, "/api/admin/download-history", "", "", "admin-session")
+	if history.Code != http.StatusOK || !strings.Contains(history.Body.String(), `"title":"Example Movie"`) || !strings.Contains(history.Body.String(), `"user":"Viewer"`) || !strings.Contains(history.Body.String(), `"status":"cancelled"`) {
+		t.Fatalf("download history response: %d %s", history.Code, history.Body.String())
+	}
+	var payload struct {
+		Items []downloadHistoryEntry `json:"items"`
+	}
+	if err := json.Unmarshal(history.Body.Bytes(), &payload); err != nil || len(payload.Items) != 1 || payload.Items[0].ID == "" {
+		t.Fatalf("download history has no stable entry ID: items=%+v err=%v", payload.Items, err)
+	}
+	deletePath := "/api/admin/download-history/" + payload.Items[0].ID + "/delete"
+	if got := request(a, http.MethodPost, deletePath, `{}`, a.origin, "user-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("regular user deleted history: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(a, http.MethodPost, deletePath, `{}`, a.origin, "admin-session"); got.Code != http.StatusOK {
+		t.Fatalf("admin could not delete history: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(a, http.MethodGet, "/api/admin/download-history", "", "", "admin-session"); got.Code != http.StatusOK || strings.Contains(got.Body.String(), `"title":"Example Movie"`) {
+		t.Fatalf("deleted history still visible: %d %s", got.Code, got.Body.String())
 	}
 }
 

@@ -22,7 +22,7 @@ vloader lets you:
 - use a responsive interface on phones, tablets, and desktop browsers
 - request movies and series through Radarr and Sonarr search
 - approve requests with an administrator-selected destination folder
-- review all requests and monitor active download progress in a dedicated administrator workspace
+- review all requests, monitor active download progress, and remove individual completed or cancelled download-history entries in a dedicated administrator workspace
 - notify administrators about new requests and requesters when a title becomes available in Emby
 - trigger a library sync from a Radarr or Sonarr webhook
 - authenticate with a local administrator account, OIDC, or both
@@ -82,7 +82,7 @@ cp compose-production-template.yml compose.yml
 cp .env.example .env
 ```
 
-Set `VLOADER_VERSION` in `.env` to an image tag such as `0.2` for the current minor series or `0.2.3` to pin an exact release. Then create `./data` with UID/GID `10001` and run:
+Set `VLOADER_VERSION` in `.env` to an image tag such as `0.3` for the current minor series or `0.3.1` to pin an exact release. Then create `./data` with UID/GID `10001` and run:
 
 ```bash
 docker compose up -d
