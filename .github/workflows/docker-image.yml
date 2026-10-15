@@ -4,14 +4,13 @@ on:
   push:
     branches: [main]
     tags:
-      - 'v*.*'
       - 'v*.*.*'
   pull_request:
     branches: [main]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing release tag to publish (v0.1 or v0.1.1); empty builds without publishing
+        description: Existing release tag to publish (v0.1.0); empty builds without publishing
         required: false
         type: string
 
@@ -52,11 +51,11 @@ jobs:
           fi
           if [[ -z "$tag" ]]; then
             echo "is_release=false" >> "$GITHUB_OUTPUT"
-          elif [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\.(0|[1-9][0-9]*))?$ ]]; then
+          elif [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "is_release=true" >> "$GITHUB_OUTPUT"
             echo "tag=$tag" >> "$GITHUB_OUTPUT"
           else
-            echo "Invalid release tag; expected vX.Y or vX.Y.Z" >&2
+            echo "Invalid release tag; expected vX.Y.Z" >&2
             exit 1
           fi
 
@@ -115,11 +114,7 @@ jobs:
             if [[ "$IS_RELEASE" == "true" ]]; then
               version="${RELEASE_TAG#v}"
               echo "${IMAGE_NAME}:${version}"
-              if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
-                echo "${IMAGE_NAME}:latest"
-              else
-                echo "${IMAGE_NAME}:${version%.*}"
-              fi
+              echo "${IMAGE_NAME}:${version%.*}"
             fi
             echo "${IMAGE_NAME}:sha-${SOURCE_SHA:0:7}"
             echo TAGS
@@ -171,11 +166,7 @@ jobs:
           version="${RELEASE_TAG#v}"
           docker buildx imagetools inspect "${IMAGE_NAME}:${version}"
           docker buildx imagetools inspect "${IMAGE_NAME}:sha-${SOURCE_SHA:0:7}"
-          if [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
-            docker buildx imagetools inspect "${IMAGE_NAME}:latest"
-          else
-            docker buildx imagetools inspect "${IMAGE_NAME}:${version%.*}"
-          fi
+          docker buildx imagetools inspect "${IMAGE_NAME}:${version%.*}"
 
   release:
     needs: build

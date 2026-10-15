@@ -1,4 +1,6 @@
 ## Unreleased
+- Require three-part semantic-version tags for Docker releases and keep `latest` unchanged for patch releases.
+
 - Use a native progress element for active downloads so the bar remains visible under vloader's strict Content Security Policy.
 - Render active-download progress bars from the transferred-byte percentage in every supported browser.
 - Record completed and cancelled downloads in the administrator history, including the transferred amount and completion state.
