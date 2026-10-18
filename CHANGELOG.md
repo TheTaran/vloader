@@ -1,4 +1,6 @@
 ## Unreleased
+- Show newest requests first in both administrator and personal request lists.
+
 - Require three-part semantic-version tags for Docker releases and keep `latest` unchanged for patch releases.
 
 - Use a native progress element for active downloads so the bar remains visible under vloader's strict Content Security Policy.

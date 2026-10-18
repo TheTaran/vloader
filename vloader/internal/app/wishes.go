@@ -13,6 +13,7 @@ import (
 	"net/smtp"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -70,6 +71,7 @@ func (a *App) listWishesFor(w http.ResponseWriter, r *http.Request, includeAll b
 			items = append(items, wish)
 		}
 	}
+	slices.SortFunc(items, func(left, right Wish) int { return right.CreatedAt.Compare(left.CreatedAt) })
 	arrEnabled := a.cfg.RadarrURL != "" || a.cfg.SonarrURL != ""
 	jsonOut(w, map[string]any{"items": items, "admin": includeAll, "metadataEnabled": arrEnabled, "tmdbEnabled": false, "tvdbEnabled": false})
 }

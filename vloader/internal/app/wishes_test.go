@@ -176,6 +176,47 @@ func TestWishAccessPersistenceAndAdminReview(t *testing.T) {
 	}
 }
 
+func TestUserWishesAreNewestFirst(t *testing.T) {
+	a := testApp(t)
+	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	now := time.Now().UTC()
+	a.wishes = []Wish{
+		{ID: "other", Requester: "other", Title: "Other request", Status: "pending", CreatedAt: now.Add(time.Minute)},
+		{ID: "old", Requester: "viewer", Title: "Old request", Status: "pending", CreatedAt: now.Add(-time.Hour)},
+		{ID: "new", Requester: "viewer", Title: "New request", Status: "pending", CreatedAt: now},
+	}
+	got := request(a, http.MethodGet, "/api/wishes", "", "", "user-session")
+	var response struct {
+		Items []Wish `json:"items"`
+	}
+	if got.Code != http.StatusOK || json.Unmarshal(got.Body.Bytes(), &response) != nil || len(response.Items) != 2 {
+		t.Fatalf("user wishes response: %d %s", got.Code, got.Body.String())
+	}
+	if response.Items[0].ID != "new" || response.Items[1].ID != "old" {
+		t.Fatalf("user wishes are not newest first: %+v", response.Items)
+	}
+}
+
+func TestAdminWishesAreNewestFirst(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	now := time.Now().UTC()
+	a.wishes = []Wish{
+		{ID: "old", Requester: "viewer", Title: "Old request", Status: "pending", CreatedAt: now.Add(-time.Hour)},
+		{ID: "new", Requester: "viewer", Title: "New request", Status: "pending", CreatedAt: now},
+	}
+	got := request(a, http.MethodGet, "/api/admin/wishes", "", "", "admin-session")
+	var response struct {
+		Items []Wish `json:"items"`
+	}
+	if got.Code != http.StatusOK || json.Unmarshal(got.Body.Bytes(), &response) != nil || len(response.Items) != 2 {
+		t.Fatalf("admin wishes response: %d %s", got.Code, got.Body.String())
+	}
+	if response.Items[0].ID != "new" || response.Items[1].ID != "old" {
+		t.Fatalf("admin wishes are not newest first: %+v", response.Items)
+	}
+}
+
 func TestExpiredAnsweredWishesAreRemovedButPendingWishesRemain(t *testing.T) {
 	a := testApp(t)
 	a.sessions["user-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
