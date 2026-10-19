@@ -1,4 +1,6 @@
 ## Unreleased
+- Update the JOSE dependency to v4.1.6.
+
 - Show newest requests first in both administrator and personal request lists.
 
 - Require three-part semantic-version tags for Docker releases and keep `latest` unchanged for patch releases.
