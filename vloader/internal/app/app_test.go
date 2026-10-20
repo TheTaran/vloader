@@ -582,3 +582,24 @@ func TestCatalogForClientOmitsDuplicateRawMetadata(t *testing.T) {
 		t.Fatal("client conversion modified the persisted catalog")
 	}
 }
+
+func TestCatalogForClientUsesLatestEpisodeDateForSeries(t *testing.T) {
+	seriesDate := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	episodeDate := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	original := Catalog{Items: []Item{
+		{ID: "series", Name: "Example series", Type: "Series", DateCreated: seriesDate},
+		{ID: "episode", Name: "New episode", Type: "Episode", SeriesID: "series", DateCreated: episodeDate},
+		{ID: "movie", Name: "Example movie", Type: "Movie", DateCreated: seriesDate},
+	}}
+
+	client := catalogForClient(original)
+	if got := client.Items[0].DateCreated; !got.Equal(episodeDate) {
+		t.Fatalf("series update date = %s, want latest episode date %s", got, episodeDate)
+	}
+	if got := client.Items[2].DateCreated; !got.Equal(seriesDate) {
+		t.Fatalf("movie update date = %s, want original date %s", got, seriesDate)
+	}
+	if got := original.Items[0].DateCreated; !got.Equal(seriesDate) {
+		t.Fatalf("client conversion modified persisted series date: %s", got)
+	}
+}

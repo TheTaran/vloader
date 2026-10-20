@@ -1326,11 +1326,20 @@ func (a *App) syncCatalog(w http.ResponseWriter, r *http.Request) {
 // snapshots. The GUI already receives every field it uses explicitly; avoiding
 // the duplicate raw object keeps large libraries reliable on mobile networks.
 func catalogForClient(c Catalog) Catalog {
+	latestEpisodeDates := make(map[string]time.Time)
+	for _, item := range c.Items {
+		if item.Type == "Episode" && item.SeriesID != "" && item.DateCreated.After(latestEpisodeDates[item.SeriesID]) {
+			latestEpisodeDates[item.SeriesID] = item.DateCreated
+		}
+	}
 	result := c
 	result.Items = make([]Item, len(c.Items))
 	copy(result.Items, c.Items)
 	for i := range result.Items {
 		result.Items[i].Metadata = nil
+		if result.Items[i].Type == "Series" && latestEpisodeDates[result.Items[i].ID].After(result.Items[i].DateCreated) {
+			result.Items[i].DateCreated = latestEpisodeDates[result.Items[i].ID]
+		}
 	}
 	result.Libraries = make([]Item, len(c.Libraries))
 	copy(result.Libraries, c.Libraries)

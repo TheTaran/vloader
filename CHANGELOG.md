@@ -1,4 +1,6 @@
 ## Unreleased
+- Show recently added series on the All content dashboard when a new episode is synchronized.
+
 - Update the JOSE dependency to v4.1.6.
 
 - Show newest requests first in both administrator and personal request lists.
