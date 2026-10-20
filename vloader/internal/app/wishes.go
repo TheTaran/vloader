@@ -62,14 +62,14 @@ func (a *App) listWishesFor(w http.ResponseWriter, r *http.Request, includeAll b
 	}
 	items := make([]Wish, 0, len(a.wishes))
 	for _, wish := range a.wishes {
-		if includeAll || wish.Requester == user {
+		if (includeAll || wish.Requester == user) && (includeAll || !wish.HiddenByRequester) {
 			if wish.RequesterName == "" {
 				wish.RequesterName = displayNames[wish.Requester]
 			}
 			wish.RequesterEmail = ""
 			wish.AvailabilityEmailSent = false
 			wish.CanCancel = wish.Requester == user && wish.Status == "pending"
-			wish.CanDelete = wish.Requester == user && wish.Status != "pending"
+			wish.CanDelete = wish.Requester == user && wish.Status != "pending" && !wish.HiddenByRequester
 			items = append(items, wish)
 		}
 	}
@@ -831,34 +831,30 @@ func (a *App) deleteOwnWish(w http.ResponseWriter, r *http.Request) {
 	user, id := a.user(r), r.PathValue("id")
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	next := make([]Wish, 0, len(a.wishes))
-	found := false
-	for _, wish := range a.wishes {
-		if wish.ID != id {
-			next = append(next, wish)
+	next := append([]Wish(nil), a.wishes...)
+	for i := range next {
+		if next[i].ID != id {
 			continue
 		}
-		found = true
-		if wish.Requester != user {
+		if next[i].Requester != user {
 			fail(w, http.StatusForbidden, "You can only delete your own requests")
 			return
 		}
-		if wish.Status == "pending" {
+		if next[i].Status == "pending" {
 			fail(w, http.StatusConflict, "Cancel a request before deleting it")
 			return
 		}
-	}
-	if !found {
-		fail(w, http.StatusNotFound, "Request not found")
+		next[i].HiddenByRequester = true
+		next[i].UpdatedAt = time.Now().UTC()
+		if err := persist(a.data+"/wishes.json", next); err != nil {
+			fail(w, http.StatusInternalServerError, "Could not delete the request")
+			return
+		}
+		a.wishes = next
+		jsonOut(w, map[string]bool{"ok": true})
 		return
 	}
-	if err := persist(a.data+"/wishes.json", next); err != nil {
-		fail(w, http.StatusInternalServerError, "Could not delete the request")
-		return
-	}
-	a.wishes = next
-	delete(a.wishMetadata, id)
-	jsonOut(w, map[string]bool{"ok": true})
+	fail(w, http.StatusNotFound, "Request not found")
 }
 
 func (a *App) deleteWish(w http.ResponseWriter, r *http.Request) {

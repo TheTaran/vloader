@@ -1,5 +1,5 @@
 ## Unreleased
-- Let users delete their own completed, declined, or cancelled requests.
+- Let users hide their own completed, declined, or cancelled requests without removing them from the administrator history.
 
 - Let requesters cancel their own requests while they are awaiting review.
 

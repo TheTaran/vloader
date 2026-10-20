@@ -451,6 +451,7 @@ func TestWishMatchingUsesProviderIDAndMediaType(t *testing.T) {
 
 func TestRequesterCanDeleteOnlyOwnAnsweredWish(t *testing.T) {
 	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
 	a.sessions["viewer-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
 	a.sessions["other-session"] = session{User: "other", Expiry: time.Now().Add(time.Hour)}
 	a.wishes = []Wish{
@@ -472,7 +473,13 @@ func TestRequesterCanDeleteOnlyOwnAnsweredWish(t *testing.T) {
 	if got := request(a, http.MethodPost, "/api/wishes/answered/remove", `{}`, a.origin, "viewer-session"); got.Code != http.StatusOK {
 		t.Fatalf("request deletion failed: %d %s", got.Code, got.Body.String())
 	}
-	if len(a.wishes) != 1 || a.wishes[0].ID != "pending" {
-		t.Fatalf("wrong requests remain: %+v", a.wishes)
+	if len(a.wishes) != 2 || !a.wishes[0].HiddenByRequester || a.wishes[0].ID != "answered" {
+		t.Fatalf("request was not hidden for its requester: %+v", a.wishes)
+	}
+	if listed := request(a, http.MethodGet, "/api/wishes", "", "", "viewer-session"); listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), "Answered") {
+		t.Fatalf("hidden request remained in the requester list: %d %s", listed.Code, listed.Body.String())
+	}
+	if listed := request(a, http.MethodGet, "/api/admin/wishes", "", "", "admin-session"); listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), "Answered") {
+		t.Fatalf("hidden request disappeared from the admin list: %d %s", listed.Code, listed.Body.String())
 	}
 }

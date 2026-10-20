@@ -143,6 +143,7 @@ type Wish struct {
 	Status                string    `json:"status"`
 	CanCancel             bool      `json:"canCancel,omitempty"`
 	CanDelete             bool      `json:"canDelete,omitempty"`
+	HiddenByRequester     bool      `json:"hiddenByRequester,omitempty"`
 	ItemID                string    `json:"itemId,omitempty"`
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
