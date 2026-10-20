@@ -68,6 +68,7 @@ func (a *App) listWishesFor(w http.ResponseWriter, r *http.Request, includeAll b
 			}
 			wish.RequesterEmail = ""
 			wish.AvailabilityEmailSent = false
+			wish.CanCancel = wish.Requester == user && wish.Status == "pending"
 			items = append(items, wish)
 		}
 	}
@@ -432,7 +433,7 @@ func (a *App) createWish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, existing := range a.wishes {
-		if existing.Requester == wish.Requester && existing.Type == wish.Type && normalizedTitle(existing.Title) == normalizedTitle(wish.Title) && existing.Status != "rejected" {
+		if existing.Requester == wish.Requester && existing.Type == wish.Type && normalizedTitle(existing.Title) == normalizedTitle(wish.Title) && existing.Status != "rejected" && existing.Status != "cancelled" {
 			a.mu.Unlock()
 			fail(w, http.StatusConflict, "You already requested this title")
 			return
@@ -791,6 +792,38 @@ func (a *App) updateWish(w http.ResponseWriter, r *http.Request) {
 	a.wishes = next
 	a.mu.Unlock()
 	jsonOut(w, map[string]bool{"ok": true})
+}
+
+func (a *App) cancelWish(w http.ResponseWriter, r *http.Request) {
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	user, id := a.user(r), r.PathValue("id")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	next := append([]Wish(nil), a.wishes...)
+	for i := range next {
+		if next[i].ID != id {
+			continue
+		}
+		if next[i].Requester != user {
+			fail(w, http.StatusForbidden, "You can only cancel your own requests")
+			return
+		}
+		if next[i].Status != "pending" {
+			fail(w, http.StatusConflict, "Only requests awaiting review can be cancelled")
+			return
+		}
+		next[i].Status = "cancelled"
+		next[i].UpdatedAt = time.Now().UTC()
+		if err := persist(a.data+"/wishes.json", next); err != nil {
+			fail(w, http.StatusInternalServerError, "Could not cancel the request")
+			return
+		}
+		a.wishes = next
+		jsonOut(w, map[string]bool{"ok": true})
+		return
+	}
+	fail(w, http.StatusNotFound, "Request not found")
 }
 
 func (a *App) deleteWish(w http.ResponseWriter, r *http.Request) {

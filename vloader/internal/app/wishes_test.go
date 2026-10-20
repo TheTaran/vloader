@@ -242,6 +242,42 @@ func TestExpiredAnsweredWishesAreRemovedButPendingWishesRemain(t *testing.T) {
 	}
 }
 
+func TestRequesterCanCancelOnlyOwnPendingWish(t *testing.T) {
+	a := testApp(t)
+	a.sessions["viewer-session"] = session{User: "viewer", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["other-session"] = session{User: "other", Expiry: time.Now().Add(time.Hour)}
+	a.wishes = []Wish{
+		{ID: "own", Requester: "viewer", Title: "Own request", Type: "Movie", Status: "pending", CreatedAt: time.Now().UTC()},
+		{ID: "reviewed", Requester: "viewer", Title: "Reviewed request", Type: "Movie", Status: "approved", CreatedAt: time.Now().UTC()},
+	}
+	if err := persist(a.data+"/wishes.json", a.wishes); err != nil {
+		t.Fatal(err)
+	}
+	if listed := request(a, http.MethodGet, "/api/wishes", "", "", "viewer-session"); listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"canCancel":true`) {
+		t.Fatalf("pending request is not cancellable: %d %s", listed.Code, listed.Body.String())
+	}
+
+	if got := request(a, http.MethodPost, "/api/wishes/own/cancel", `{}`, a.origin, "other-session"); got.Code != http.StatusForbidden {
+		t.Fatalf("other user cancelled request: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(a, http.MethodPost, "/api/wishes/reviewed/cancel", `{}`, a.origin, "viewer-session"); got.Code != http.StatusConflict {
+		t.Fatalf("reviewed request was cancelled: %d %s", got.Code, got.Body.String())
+	}
+	if got := request(a, http.MethodPost, "/api/wishes/own/cancel", `{}`, a.origin, "viewer-session"); got.Code != http.StatusOK {
+		t.Fatalf("request cancellation failed: %d %s", got.Code, got.Body.String())
+	}
+	if a.wishes[0].Status != "cancelled" {
+		t.Fatalf("request status = %q, want cancelled", a.wishes[0].Status)
+	}
+	if got := request(a, http.MethodPost, "/api/wishes/own/cancel", `{}`, a.origin, "viewer-session"); got.Code != http.StatusConflict {
+		t.Fatalf("cancelled request was cancelled again: %d %s", got.Code, got.Body.String())
+	}
+	listed := request(a, http.MethodGet, "/api/wishes", "", "", "viewer-session")
+	if listed.Code != http.StatusOK || strings.Contains(listed.Body.String(), `"canCancel":true`) {
+		t.Fatalf("cancelled request is still cancellable: %d %s", listed.Code, listed.Body.String())
+	}
+}
+
 func TestAdminCanDeleteWishAndRegularUserCannot(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
