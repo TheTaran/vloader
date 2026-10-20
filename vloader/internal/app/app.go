@@ -142,6 +142,7 @@ type Wish struct {
 	SourceURL             string    `json:"sourceUrl,omitempty"`
 	Status                string    `json:"status"`
 	CanCancel             bool      `json:"canCancel,omitempty"`
+	CanDelete             bool      `json:"canDelete,omitempty"`
 	ItemID                string    `json:"itemId,omitempty"`
 	CreatedAt             time.Time `json:"createdAt"`
 	UpdatedAt             time.Time `json:"updatedAt"`
@@ -481,6 +482,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("GET /api/wishes/{id}/metadata", a.guard(http.HandlerFunc(a.getWishMetadata)))
 	m.Handle("POST /api/wishes/{id}", a.adminGuard(http.HandlerFunc(a.updateWish)))
 	m.Handle("POST /api/wishes/{id}/cancel", a.guard(http.HandlerFunc(a.cancelWish)))
+	m.Handle("POST /api/wishes/{id}/remove", a.guard(http.HandlerFunc(a.deleteOwnWish)))
 	m.Handle("POST /api/wishes/{id}/delete", a.adminGuard(http.HandlerFunc(a.deleteWish)))
 	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))

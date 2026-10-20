@@ -69,6 +69,7 @@ func (a *App) listWishesFor(w http.ResponseWriter, r *http.Request, includeAll b
 			wish.RequesterEmail = ""
 			wish.AvailabilityEmailSent = false
 			wish.CanCancel = wish.Requester == user && wish.Status == "pending"
+			wish.CanDelete = wish.Requester == user && wish.Status != "pending"
 			items = append(items, wish)
 		}
 	}
@@ -824,6 +825,40 @@ func (a *App) cancelWish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	fail(w, http.StatusNotFound, "Request not found")
+}
+
+func (a *App) deleteOwnWish(w http.ResponseWriter, r *http.Request) {
+	user, id := a.user(r), r.PathValue("id")
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	next := make([]Wish, 0, len(a.wishes))
+	found := false
+	for _, wish := range a.wishes {
+		if wish.ID != id {
+			next = append(next, wish)
+			continue
+		}
+		found = true
+		if wish.Requester != user {
+			fail(w, http.StatusForbidden, "You can only delete your own requests")
+			return
+		}
+		if wish.Status == "pending" {
+			fail(w, http.StatusConflict, "Cancel a request before deleting it")
+			return
+		}
+	}
+	if !found {
+		fail(w, http.StatusNotFound, "Request not found")
+		return
+	}
+	if err := persist(a.data+"/wishes.json", next); err != nil {
+		fail(w, http.StatusInternalServerError, "Could not delete the request")
+		return
+	}
+	a.wishes = next
+	delete(a.wishMetadata, id)
+	jsonOut(w, map[string]bool{"ok": true})
 }
 
 func (a *App) deleteWish(w http.ResponseWriter, r *http.Request) {
