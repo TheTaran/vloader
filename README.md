@@ -150,7 +150,7 @@ curl -X POST \
   https://vloader.example.com/api/external/sync
 ```
 
-The response contains only `ok` and the sync time. Generating a replacement key invalidates the previous key. **Revoke API key** disables external sync immediately.
+vloader responds immediately with `202 Accepted` and queues the catalog sync in the background, so Radarr and Sonarr webhooks do not time out while large libraries are processed. Generating a replacement key invalidates the previous key. **Revoke API key** disables external sync immediately.
 
 ## Authentication
 

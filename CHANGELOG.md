@@ -1,4 +1,6 @@
 ## Unreleased
+- Acknowledge authenticated Radarr and Sonarr sync webhooks immediately and run the catalog synchronization in the background, preventing reverse-proxy timeouts for large libraries.
+- Update the pinned Go toolchain to 1.27.3 to resolve a reachable `crypto/x509` vulnerability.
 - Let users hide their own completed, declined, or cancelled requests without removing them from the administrator history.
 
 - Let requesters cancel their own requests while they are awaiting review.

@@ -1363,13 +1363,19 @@ func (a *App) externalSync(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusConflict, "Sync already in progress")
 		return
 	}
-	defer a.syncMu.Unlock()
-	next, status, err := a.runCatalogSync(r.Context())
-	if err != nil {
-		fail(w, status, err.Error())
-		return
-	}
-	jsonOut(w, map[string]any{"ok": true, "updated": next.Updated})
+	// A full Emby catalog sync can take longer than a webhook proxy allows for
+	// an upstream response. Acknowledge the authenticated request immediately
+	// and keep the lock until the background sync has completed.
+	go func() {
+		defer a.syncMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if _, status, err := a.runCatalogSync(ctx); err != nil {
+			log.Printf("vloader: external sync failed status=%d: %v", status, err)
+		}
+	}()
+	w.WriteHeader(http.StatusAccepted)
+	jsonOut(w, map[string]bool{"ok": true, "queued": true})
 }
 
 func (a *App) runCatalogSync(ctx context.Context) (Catalog, int, error) {

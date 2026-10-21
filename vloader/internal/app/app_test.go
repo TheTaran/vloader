@@ -191,11 +191,13 @@ func TestAdminCanManageExternalSyncAPIKey(t *testing.T) {
 }
 
 func TestExternalSyncRequiresKeyAndAcceptsWebhookWithoutOrigin(t *testing.T) {
+	requested := make(chan struct{}, 1)
 	emby := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/Library/MediaFolders" {
 			http.NotFound(w, r)
 			return
 		}
+		requested <- struct{}{}
 		json.NewEncoder(w).Encode(map[string]any{"Items": []any{}})
 	}))
 	defer emby.Close()
@@ -211,11 +213,16 @@ func TestExternalSyncRequiresKeyAndAcceptsWebhookWithoutOrigin(t *testing.T) {
 	r.Header.Set("X-Api-Key", key)
 	w := httptest.NewRecorder()
 	a.Handler().ServeHTTP(w, r)
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"ok":true`) {
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"queued":true`) {
 		t.Fatalf("external sync status=%d body=%s", w.Code, w.Body.String())
 	}
 	if strings.Contains(w.Body.String(), `"Items"`) {
 		t.Fatalf("external sync exposed catalog: %s", w.Body.String())
+	}
+	select {
+	case <-requested:
+	case <-time.After(time.Second):
+		t.Fatal("external sync was not started in the background")
 	}
 }
 
