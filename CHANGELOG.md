@@ -1,4 +1,5 @@
 ## Unreleased
+- Keep legacy Emby libraries visible after saving All content settings when Emby supplies its internal server GUID.
 - Support separate Emby and Jellyfin connections that can be synchronized into one collection.
 - Let administrators hide selected imported libraries from normal users while retaining full administrator access.
 - Show duration and average transfer speed for each entry in the administrator download history.

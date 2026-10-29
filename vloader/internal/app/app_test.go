@@ -154,6 +154,22 @@ func TestHiddenAllContentLibrariesAreAdminOnly(t *testing.T) {
 	}
 }
 
+func TestLegacyEmbyServerGUIDDoesNotHideCatalog(t *testing.T) {
+	a := testApp(t)
+	a.cfg = Config{EmbyURL: "https://emby.example.test", APIKey: "key", SourceMode: "emby", SourcePrefix: "/media"}
+	// Emby writes its own server GUID into ServerID. This predates the vloader
+	// source identity field and must not be mistaken for a configured source.
+	a.catalog = Catalog{SourceURL: a.cfg.EmbyURL, Libraries: []Item{{ID: "movies", ServerID: "emby-internal-guid", Name: "Movies"}}, Items: []Item{{ID: "movie", ServerID: "emby-internal-guid", LibraryID: "movies", Name: "Example", Type: "Movie"}}}
+
+	visible := catalogForViewer(a.catalog, a.cfg, false)
+	if len(visible.Libraries) != 1 || len(visible.Items) != 1 {
+		t.Fatalf("legacy Emby catalog was hidden: %+v", visible)
+	}
+	if _, server, ok := a.sourceItem("movie", false); !ok || server.ID != "emby" {
+		t.Fatalf("legacy Emby item did not resolve to Emby: server=%+v ok=%t", server, ok)
+	}
+}
+
 func TestAdminCanSaveSeparateEmbyAndJellyfinSettings(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}

@@ -1570,9 +1570,6 @@ func catalogForViewer(c Catalog, cfg Config, admin bool) Catalog {
 	for _, server := range configuredMediaServers(cfg) {
 		configured[server.ID] = true
 	}
-	if len(cfg.MediaServers) == 0 && cfg.EmbyURL != "" {
-		configured["emby"] = true
-	}
 	hidden := map[string]bool{}
 	if !admin {
 		for _, id := range cfg.HiddenAllContentLibraries {
@@ -1581,26 +1578,33 @@ func catalogForViewer(c Catalog, cfg Config, admin bool) Catalog {
 	}
 	libraries := result.Libraries[:0]
 	for _, library := range result.Libraries {
-		serverID := library.ServerID
-		if serverID == "" {
-			serverID = "emby"
-		}
+		serverID := catalogItemServerID(cfg, library)
 		if configured[serverID] && !hidden[library.ID] {
 			libraries = append(libraries, library)
 		}
 	}
 	items := result.Items[:0]
 	for _, item := range result.Items {
-		serverID := item.ServerID
-		if serverID == "" {
-			serverID = "emby"
-		}
+		serverID := catalogItemServerID(cfg, item)
 		if configured[serverID] && !hidden[item.LibraryID] {
 			items = append(items, item)
 		}
 	}
 	result.Libraries, result.Items = libraries, items
 	return result
+}
+
+// catalogItemServerID returns the configured source identity. Before the
+// multi-server setting was introduced, Emby populated ServerID with its own
+// internal GUID. Legacy catalogs must therefore always be treated as Emby.
+func catalogItemServerID(cfg Config, item Item) string {
+	if len(cfg.MediaServers) == 0 {
+		return "emby"
+	}
+	if item.ServerID == "" {
+		return "emby"
+	}
+	return item.ServerID
 }
 
 func (a *App) externalSync(w http.ResponseWriter, r *http.Request) {
@@ -1712,10 +1716,7 @@ func (a *App) sourceItem(id string, admin bool) (Item, MediaServer, bool) {
 					}
 				}
 			}
-			serverID := v.ServerID
-			if serverID == "" {
-				serverID = "emby"
-			}
+			serverID := catalogItemServerID(a.cfg, v)
 			server, ok := mediaServerByID(a.cfg, serverID)
 			if !ok {
 				return Item{}, MediaServer{}, false
