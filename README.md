@@ -100,17 +100,17 @@ Opening a title shows its Emby metadata. Movies and individual episodes download
 
 On phones and tablets, use the menu button in the top bar to open all libraries, Settings, Requests, Sync, and Sign out. Poster images load lazily to reduce mobile bandwidth and parsing work.
 
-### Connect Emby
+### Connect Emby and Jellyfin
 
-Open **Settings → Connection** and save:
+Open **Settings → Connection** and choose **Emby** or **Jellyfin** from the server selector. Each server has its own:
 
-- the Emby server URL, optionally including an `/emby` base path
-- an Emby API key created under **Advanced → API Keys**
+- server URL, optionally including a base path
+- API key created in the server's administration settings
 - the transfer method and source path
 
-Administrators can start a manual sync from the **Sync** button in the Emby server box. Scheduled sync is configured on the same settings page.
+Both servers can be enabled at once. vloader keeps their item identifiers separate, merges their libraries into one collection, and routes images and downloads back to the correct source. Administrators can start a manual sync from the **Sync** button. Scheduled sync is configured on the same settings page.
 
-vloader preserves library and item IDs, parent relationships, descriptions, release information, genres, ratings, media sources, streams, and image references. Artwork is fetched from Emby only when the browser requests it. If a sync fails, the last successful catalog remains available.
+In **Settings → All content**, administrators can hide selected imported libraries from normal users. Hidden libraries remain visible to administrators, including their images and downloads. vloader preserves library and item IDs, parent relationships, descriptions, release information, genres, ratings, media sources, streams, and image references. Artwork is fetched from the configured media server only when the browser requests it. If a sync fails, the last successful catalog remains available.
 
 ### Requests, Radarr, and Sonarr
 

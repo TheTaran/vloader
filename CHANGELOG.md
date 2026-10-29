@@ -1,4 +1,7 @@
 ## Unreleased
+- Support separate Emby and Jellyfin connections that can be synchronized into one collection.
+- Let administrators hide selected imported libraries from normal users while retaining full administrator access.
+- Show duration and average transfer speed for each entry in the administrator download history.
 - Acknowledge authenticated Radarr and Sonarr sync webhooks immediately and run the catalog synchronization in the background, preventing reverse-proxy timeouts for large libraries.
 - Update the pinned Go toolchain to 1.27.3 to resolve a reachable `crypto/x509` vulnerability.
 - Let users hide their own completed, declined, or cancelled requests without removing them from the administrator history.

@@ -35,45 +35,60 @@ import (
 var assets embed.FS
 
 type Config struct {
-	EmbyURL              string
-	APIKey               string
-	SourcePrefix         string
-	SourceMode           string
-	OIDCIssuer           string
-	OIDCClientID         string
-	OIDCClientSecret     string
-	OIDCAllowedSubjects  string
-	OIDCAdminSubjects    string
-	OIDCGroupsClaim      string
-	OIDCAllowedGroups    string
-	OIDCAdminGroups      string
-	UpdateOIDC           bool
-	SyncEnabled          bool
-	SyncIntervalMinutes  int
-	LatestUpdatesDays    int
-	AdminEmail           string
-	SMTPHost             string
-	SMTPPort             int
-	SMTPDisableTLS       bool
-	SMTPUsername         string
-	SMTPPassword         string
-	SMTPFrom             string
-	SlackWebhookURL      string
-	NotifyRequestsEmail  bool
-	NotifyRequestsSlack  bool
-	NotifyDownloadsEmail bool
-	NotifyDownloadsSlack bool
-	NotifyAvailableEmail bool
-	NotifyAvailableSlack bool
-	RadarrURL            string
-	RadarrAPIKey         string
-	SonarrURL            string
-	SonarrAPIKey         string
-	SyncAPIKeyHash       string
+	EmbyURL                   string
+	APIKey                    string
+	SourcePrefix              string
+	SourceMode                string
+	OIDCIssuer                string
+	OIDCClientID              string
+	OIDCClientSecret          string
+	OIDCAllowedSubjects       string
+	OIDCAdminSubjects         string
+	OIDCGroupsClaim           string
+	OIDCAllowedGroups         string
+	OIDCAdminGroups           string
+	UpdateOIDC                bool
+	SyncEnabled               bool
+	SyncIntervalMinutes       int
+	LatestUpdatesDays         int
+	AdminEmail                string
+	SMTPHost                  string
+	SMTPPort                  int
+	SMTPDisableTLS            bool
+	SMTPUsername              string
+	SMTPPassword              string
+	SMTPFrom                  string
+	SlackWebhookURL           string
+	NotifyRequestsEmail       bool
+	NotifyRequestsSlack       bool
+	NotifyDownloadsEmail      bool
+	NotifyDownloadsSlack      bool
+	NotifyAvailableEmail      bool
+	NotifyAvailableSlack      bool
+	RadarrURL                 string
+	RadarrAPIKey              string
+	SonarrURL                 string
+	SonarrAPIKey              string
+	SyncAPIKeyHash            string
+	MediaServers              []MediaServer
+	HiddenAllContentLibraries []string
+}
+
+// MediaServer is an administrator-configured Emby or Jellyfin source. API keys
+// remain server-side and are never included in the settings response.
+type MediaServer struct {
+	ID           string `json:"id"`
+	Type         string `json:"type"`
+	URL          string `json:"url"`
+	APIKey       string `json:"apiKey,omitempty"`
+	SourcePrefix string `json:"sourcePrefix"`
+	SourceMode   string `json:"sourceMode"`
 }
 type Item struct {
 	Metadata          json.RawMessage `json:"Metadata,omitempty"`
 	ID                string          `json:"Id"`
+	ServerID          string          `json:"serverId,omitempty"`
+	RemoteID          string          `json:"-"`
 	Name              string
 	Type              string
 	CollectionType    string
@@ -107,6 +122,13 @@ type Item struct {
 		DisplayTitle string
 		IsDefault    bool
 	}
+}
+
+func (i Item) remoteID() string {
+	if i.RemoteID != "" {
+		return i.RemoteID
+	}
+	return i.ID
 }
 
 // UnmarshalJSON retains all original Emby fields, including provider IDs and media details.
@@ -231,6 +253,76 @@ func env(k, d string) string {
 	}
 	return d
 }
+
+func configuredMediaServers(c Config) []MediaServer {
+	if len(c.MediaServers) > 0 {
+		servers := make([]MediaServer, 0, len(c.MediaServers))
+		for _, server := range c.MediaServers {
+			if server.URL != "" && server.APIKey != "" {
+				servers = append(servers, server)
+			}
+		}
+		return servers
+	}
+	if c.EmbyURL == "" || c.APIKey == "" {
+		return nil
+	}
+	return []MediaServer{{ID: "emby", Type: "emby", URL: c.EmbyURL, APIKey: c.APIKey, SourcePrefix: c.SourcePrefix, SourceMode: c.SourceMode}}
+}
+
+func mediaServerByID(c Config, id string) (MediaServer, bool) {
+	if len(c.MediaServers) == 0 && (id == "" || id == "emby") {
+		return MediaServer{ID: "emby", Type: "emby", URL: c.EmbyURL, APIKey: c.APIKey, SourcePrefix: c.SourcePrefix, SourceMode: c.SourceMode}, true
+	}
+	for _, server := range configuredMediaServers(c) {
+		if server.ID == id || (id == "" && server.ID == "emby") {
+			return server, true
+		}
+	}
+	return MediaServer{}, false
+}
+
+func hasMediaServerURL(c Config) bool {
+	if len(c.MediaServers) == 0 {
+		return c.EmbyURL != ""
+	}
+	for _, server := range c.MediaServers {
+		if server.URL != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func mediaCatalogID(serverID, remoteID string) string {
+	return serverID + "::" + remoteID
+}
+
+func applyServerIdentity(item *Item, serverID string) {
+	item.ServerID = serverID
+	item.RemoteID = item.ID
+	item.ID = mediaCatalogID(serverID, item.ID)
+	if item.ParentID != "" {
+		item.ParentID = mediaCatalogID(serverID, item.ParentID)
+	}
+	if item.LibraryID != "" {
+		item.LibraryID = mediaCatalogID(serverID, item.LibraryID)
+	}
+	if item.SeriesID != "" {
+		item.SeriesID = mediaCatalogID(serverID, item.SeriesID)
+	}
+	if item.SeasonID != "" {
+		item.SeasonID = mediaCatalogID(serverID, item.SeasonID)
+	}
+}
+
+func validMediaServer(server MediaServer) bool {
+	if server.ID != "emby" && server.ID != "jellyfin" || server.Type != server.ID {
+		return false
+	}
+	u, err := url.Parse(strings.TrimSpace(server.URL))
+	return err == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && (u.Scheme == "https" || u.Scheme == "http") && len(server.URL) <= 2048 && validArrKey(strings.TrimSpace(server.APIKey)) && (server.SourceMode == "emby" || server.SourceMode == "mount") && strings.HasPrefix(server.SourcePrefix, "/")
+}
 func Run() {
 	a, e := New()
 	if e != nil {
@@ -327,7 +419,7 @@ func New() (*App, error) {
 	if os.Getenv("VLOADER_DISABLE_SCHEDULER") != "true" {
 		go a.scheduler()
 	}
-	if a.cfg.EmbyURL != "" && a.cfg.APIKey != "" && a.catalogNeedsDateRefresh() {
+	if len(configuredMediaServers(a.cfg)) > 0 && a.catalogNeedsDateRefresh() {
 		go a.syncBackground()
 	}
 	return a, nil
@@ -352,7 +444,7 @@ func (a *App) scheduler() {
 		}
 		t := time.NewTimer(time.Duration(minutes) * time.Minute)
 		<-t.C
-		if a.config().SyncEnabled && a.config().EmbyURL != "" {
+		if a.config().SyncEnabled && len(configuredMediaServers(a.config())) > 0 {
 			a.syncBackground()
 		}
 	}
@@ -464,11 +556,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("GET /api/catalog", a.guard(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		a.mu.RLock()
 		defer a.mu.RUnlock()
-		if a.catalog.SourceURL != a.cfg.EmbyURL {
-			jsonOut(w, Catalog{})
-			return
-		}
-		jsonOut(w, catalogForClient(a.catalog))
+		jsonOut(w, catalogForViewer(a.catalog, a.cfg, a.role(r) == "admin"))
 	})))
 	m.Handle("GET /api/wishes", a.guard(http.HandlerFunc(a.listWishes)))
 	m.Handle("GET /api/admin/wishes", a.adminGuard(http.HandlerFunc(a.listAdminWishes)))
@@ -487,6 +575,7 @@ func (a *App) Handler() http.Handler {
 	m.Handle("POST /api/wishes/{id}/delete", a.adminGuard(http.HandlerFunc(a.deleteWish)))
 	m.Handle("GET /api/settings", a.adminGuard(http.HandlerFunc(a.settings)))
 	m.Handle("POST /api/settings", a.adminGuard(http.HandlerFunc(a.saveSettings)))
+	m.Handle("POST /api/settings/media-servers", a.adminGuard(http.HandlerFunc(a.saveMediaServers)))
 	m.Handle("POST /api/settings/dashboard", a.adminGuard(http.HandlerFunc(a.saveDashboardSettings)))
 	m.Handle("POST /api/settings/notifications", a.adminGuard(http.HandlerFunc(a.saveNotificationSettings)))
 	m.Handle("POST /api/settings/automation", a.adminGuard(http.HandlerFunc(a.saveAutomationSettings)))
@@ -634,7 +723,7 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 	user := a.user(r)
 	name := a.displayNameForUser(user)
 	c := a.config()
-	jsonOut(w, map[string]any{"user": name, "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth, "requesterEmailAvailable": a.emailForUser(user) != "", "latestUpdatesDays": c.LatestUpdatesDays, "embyConfigured": c.EmbyURL != ""})
+	jsonOut(w, map[string]any{"user": name, "role": a.role(r), "admin": a.role(r) == "admin", "oidc": a.oauth != nil, "localAuth": a.localAuth, "requesterEmailAvailable": a.emailForUser(user) != "", "latestUpdatesDays": c.LatestUpdatesDays, "embyConfigured": hasMediaServerURL(c)})
 }
 func (a *App) issue(w http.ResponseWriter, r *http.Request, user, role, displayName, email string) {
 	a.mu.Lock()
@@ -875,11 +964,19 @@ func (a *App) oidcCallback(w http.ResponseWriter, r *http.Request) {
 func (a *App) config() Config { a.mu.RLock(); defer a.mu.RUnlock(); return a.cfg }
 func (a *App) settings(w http.ResponseWriter, r *http.Request) {
 	c := a.config()
+	servers := c.MediaServers
+	if len(servers) == 0 {
+		servers = []MediaServer{{ID: "emby", Type: "emby", URL: c.EmbyURL, APIKey: c.APIKey, SourcePrefix: c.SourcePrefix, SourceMode: c.SourceMode}, {ID: "jellyfin", Type: "jellyfin", SourceMode: "emby", SourcePrefix: "/media"}}
+	}
+	publicServers := make([]map[string]any, 0, len(servers))
+	for _, server := range servers {
+		publicServers = append(publicServers, map[string]any{"id": server.ID, "type": server.Type, "url": server.URL, "sourcePrefix": server.SourcePrefix, "sourceMode": server.SourceMode, "hasAPIKey": server.APIKey != ""})
+	}
 	claim := c.OIDCGroupsClaim
 	if claim == "" {
 		claim = "groups"
 	}
-	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasSlackWebhook": c.SlackWebhookURL != "", "NotifyRequestsEmail": c.NotifyRequestsEmail, "NotifyRequestsSlack": c.NotifyRequestsSlack, "NotifyDownloadsEmail": c.NotifyDownloadsEmail, "NotifyDownloadsSlack": c.NotifyDownloadsSlack, "NotifyAvailableEmail": c.NotifyAvailableEmail, "NotifyAvailableSlack": c.NotifyAvailableSlack, "RadarrURL": c.RadarrURL, "HasRadarrAPIKey": c.RadarrAPIKey != "", "SonarrURL": c.SonarrURL, "HasSonarrAPIKey": c.SonarrAPIKey != "", "HasSyncAPIKey": c.SyncAPIKeyHash != ""})
+	jsonOut(w, map[string]any{"EmbyURL": c.EmbyURL, "HasAPIKey": c.APIKey != "", "SourcePrefix": c.SourcePrefix, "SourceMode": c.SourceMode, "MediaServers": publicServers, "HiddenAllContentLibraries": c.HiddenAllContentLibraries, "OIDCIssuer": c.OIDCIssuer, "OIDCClientID": c.OIDCClientID, "OIDCAllowedSubjects": c.OIDCAllowedSubjects, "OIDCAdminSubjects": c.OIDCAdminSubjects, "OIDCGroupsClaim": claim, "OIDCAllowedGroups": c.OIDCAllowedGroups, "OIDCAdminGroups": c.OIDCAdminGroups, "HasOIDCClientSecret": c.OIDCClientSecret != "", "OIDC": a.oauth != nil, "OIDCCallbackURL": strings.TrimRight(a.origin, "/") + "/auth/callback", "LocalAuth": a.localAuth, "SyncEnabled": c.SyncEnabled, "SyncIntervalMinutes": c.SyncIntervalMinutes, "LatestUpdatesDays": c.LatestUpdatesDays, "AdminEmail": c.AdminEmail, "SMTPHost": c.SMTPHost, "SMTPPort": c.SMTPPort, "SMTPDisableTLS": c.SMTPDisableTLS, "SMTPUsername": c.SMTPUsername, "SMTPFrom": c.SMTPFrom, "HasSMTPPassword": c.SMTPPassword != "", "HasSlackWebhook": c.SlackWebhookURL != "", "NotifyRequestsEmail": c.NotifyRequestsEmail, "NotifyRequestsSlack": c.NotifyRequestsSlack, "NotifyDownloadsEmail": c.NotifyDownloadsEmail, "NotifyDownloadsSlack": c.NotifyDownloadsSlack, "NotifyAvailableEmail": c.NotifyAvailableEmail, "NotifyAvailableSlack": c.NotifyAvailableSlack, "RadarrURL": c.RadarrURL, "HasRadarrAPIKey": c.RadarrAPIKey != "", "SonarrURL": c.SonarrURL, "HasSonarrAPIKey": c.SonarrAPIKey != "", "HasSyncAPIKey": c.SyncAPIKeyHash != ""})
 }
 
 func syncAPIKeyHash(key string) string {
@@ -992,7 +1089,8 @@ func (a *App) saveAutomationSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) saveDashboardSettings(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		LatestUpdatesDays int `json:"LatestUpdatesDays"`
+		LatestUpdatesDays         int      `json:"LatestUpdatesDays"`
+		HiddenAllContentLibraries []string `json:"HiddenAllContentLibraries"`
 	}
 	if !decode(w, r, &in) {
 		return
@@ -1001,10 +1099,31 @@ func (a *App) saveDashboardSettings(w http.ResponseWriter, r *http.Request) {
 		fail(w, http.StatusBadRequest, "Latest updates period must be between 1 and 365 days")
 		return
 	}
+	if len(in.HiddenAllContentLibraries) > 100 {
+		fail(w, http.StatusBadRequest, "Too many hidden libraries")
+		return
+	}
+	a.mu.RLock()
+	knownLibraries := make(map[string]bool, len(a.catalog.Libraries))
+	for _, library := range a.catalog.Libraries {
+		knownLibraries[library.ID] = true
+	}
+	a.mu.RUnlock()
+	hidden := make([]string, 0, len(in.HiddenAllContentLibraries))
+	seen := map[string]bool{}
+	for _, id := range in.HiddenAllContentLibraries {
+		if !knownLibraries[id] || seen[id] {
+			fail(w, http.StatusBadRequest, "Select libraries from the synchronized catalog")
+			return
+		}
+		seen[id] = true
+		hidden = append(hidden, id)
+	}
 	a.syncMu.Lock()
 	defer a.syncMu.Unlock()
 	c := a.config()
 	c.LatestUpdatesDays = in.LatestUpdatesDays
+	c.HiddenAllContentLibraries = hidden
 	if err := persist(a.data+"/settings.json", c); err != nil {
 		fail(w, http.StatusInternalServerError, "Failed to save dashboard settings")
 		return
@@ -1182,6 +1301,84 @@ func removeLegacySettings(file string, cfg Config) error {
 	return nil
 }
 
+func (a *App) saveMediaServers(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		MediaServers        []MediaServer `json:"mediaServers"`
+		SyncEnabled         bool          `json:"syncEnabled"`
+		SyncIntervalMinutes int           `json:"syncIntervalMinutes"`
+	}
+	if !decode(w, r, &in) {
+		return
+	}
+	if len(in.MediaServers) == 0 || len(in.MediaServers) > 2 || in.SyncIntervalMinutes < 5 || in.SyncIntervalMinutes > 10080 {
+		fail(w, http.StatusBadRequest, "Enter valid media server and sync settings")
+		return
+	}
+	old := a.config()
+	oldServers := map[string]MediaServer{}
+	for _, server := range old.MediaServers {
+		oldServers[server.ID] = server
+	}
+	if len(oldServers) == 0 && old.EmbyURL != "" {
+		oldServers["emby"] = MediaServer{ID: "emby", Type: "emby", URL: old.EmbyURL, APIKey: old.APIKey, SourcePrefix: old.SourcePrefix, SourceMode: old.SourceMode}
+	}
+	seen := map[string]bool{}
+	servers := make([]MediaServer, 0, len(in.MediaServers))
+	for _, server := range in.MediaServers {
+		server.ID, server.Type = strings.TrimSpace(server.ID), strings.TrimSpace(server.Type)
+		server.URL, server.APIKey = strings.TrimSpace(server.URL), strings.TrimSpace(server.APIKey)
+		server.SourcePrefix, server.SourceMode = strings.TrimSpace(server.SourcePrefix), strings.TrimSpace(server.SourceMode)
+		if seen[server.ID] || (server.ID != "emby" && server.ID != "jellyfin") || server.Type != server.ID {
+			fail(w, http.StatusBadRequest, "Media server types must be Emby or Jellyfin")
+			return
+		}
+		seen[server.ID] = true
+		if server.URL == "" {
+			server.APIKey = ""
+			if server.SourceMode == "" {
+				server.SourceMode = "emby"
+			}
+			if server.SourcePrefix == "" {
+				server.SourcePrefix = "/media"
+			}
+			servers = append(servers, server)
+			continue
+		}
+		if server.APIKey == "" && oldServers[server.ID].URL == server.URL {
+			server.APIKey = oldServers[server.ID].APIKey
+		}
+		if !validMediaServer(server) || server.APIKey == "" {
+			fail(w, http.StatusBadRequest, "Enter a valid URL, API key and download source for each enabled server")
+			return
+		}
+		servers = append(servers, server)
+	}
+	if !seen["emby"] || !seen["jellyfin"] {
+		fail(w, http.StatusBadRequest, "Configure both Emby and Jellyfin entries")
+		return
+	}
+	c := old
+	c.MediaServers, c.SyncEnabled, c.SyncIntervalMinutes = servers, in.SyncEnabled, in.SyncIntervalMinutes
+	for _, server := range servers {
+		if server.ID == "emby" {
+			c.EmbyURL, c.APIKey, c.SourcePrefix, c.SourceMode = server.URL, server.APIKey, server.SourcePrefix, server.SourceMode
+		}
+	}
+	a.syncMu.Lock()
+	defer a.syncMu.Unlock()
+	if err := persist(a.data+"/settings.json", c); err != nil {
+		fail(w, http.StatusInternalServerError, "Failed to save media server settings")
+		return
+	}
+	a.mu.Lock()
+	a.cfg = c
+	a.mu.Unlock()
+	if len(configuredMediaServers(c)) > 0 {
+		go a.syncBackground()
+	}
+	jsonOut(w, map[string]bool{"ok": true})
+}
+
 func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	var c Config
 	if !decode(w, r, &c) {
@@ -1272,14 +1469,20 @@ func (a *App) saveSettings(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, map[string]bool{"ok": true})
 }
 func (a *App) emby(ctx context.Context, c Config, endpoint string) (*http.Response, error) {
-	if c.EmbyURL == "" || c.APIKey == "" {
-		return nil, errors.New("Emby not configured")
+	return a.mediaServerRequest(ctx, MediaServer{ID: "emby", Type: "emby", URL: c.EmbyURL, APIKey: c.APIKey}, endpoint)
+}
+
+func (a *App) mediaServerRequest(ctx context.Context, server MediaServer, endpoint string) (*http.Response, error) {
+	if server.URL == "" || server.APIKey == "" {
+		return nil, errors.New("Media server not configured")
 	}
-	req, e := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(c.EmbyURL, "/")+endpoint, nil)
+	req, e := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(server.URL, "/")+endpoint, nil)
 	if e != nil {
 		return nil, e
 	}
-	req.Header.Set("X-Emby-Token", c.APIKey)
+	// Jellyfin keeps Emby's compatible API-token header, so both supported
+	// server types use this authenticated request path.
+	req.Header.Set("X-Emby-Token", server.APIKey)
 	client := *a.client
 	if strings.HasSuffix(endpoint, "/Download") {
 		client.Timeout = 0
@@ -1302,7 +1505,11 @@ func (a *App) emby(ctx context.Context, c Config, endpoint string) (*http.Respon
 	return res, nil
 }
 func (a *App) fetch(ctx context.Context, c Config, endpoint string, out any) error {
-	res, e := a.emby(ctx, c, endpoint)
+	return a.fetchMediaServer(ctx, MediaServer{ID: "emby", Type: "emby", URL: c.EmbyURL, APIKey: c.APIKey}, endpoint, out)
+}
+
+func (a *App) fetchMediaServer(ctx context.Context, server MediaServer, endpoint string, out any) error {
+	res, e := a.mediaServerRequest(ctx, server, endpoint)
 	if e != nil {
 		return e
 	}
@@ -1354,6 +1561,48 @@ func catalogForClient(c Catalog) Catalog {
 	return result
 }
 
+func catalogForViewer(c Catalog, cfg Config, admin bool) Catalog {
+	if len(cfg.MediaServers) == 0 && c.SourceURL != "" && c.SourceURL != cfg.EmbyURL {
+		return Catalog{}
+	}
+	result := catalogForClient(c)
+	configured := map[string]bool{}
+	for _, server := range configuredMediaServers(cfg) {
+		configured[server.ID] = true
+	}
+	if len(cfg.MediaServers) == 0 && cfg.EmbyURL != "" {
+		configured["emby"] = true
+	}
+	hidden := map[string]bool{}
+	if !admin {
+		for _, id := range cfg.HiddenAllContentLibraries {
+			hidden[id] = true
+		}
+	}
+	libraries := result.Libraries[:0]
+	for _, library := range result.Libraries {
+		serverID := library.ServerID
+		if serverID == "" {
+			serverID = "emby"
+		}
+		if configured[serverID] && !hidden[library.ID] {
+			libraries = append(libraries, library)
+		}
+	}
+	items := result.Items[:0]
+	for _, item := range result.Items {
+		serverID := item.ServerID
+		if serverID == "" {
+			serverID = "emby"
+		}
+		if configured[serverID] && !hidden[item.LibraryID] {
+			items = append(items, item)
+		}
+	}
+	result.Libraries, result.Items = libraries, items
+	return result
+}
+
 func (a *App) externalSync(w http.ResponseWriter, r *http.Request) {
 	if !a.validSyncAPIKey(r) {
 		fail(w, http.StatusUnauthorized, "Invalid API key")
@@ -1380,31 +1629,48 @@ func (a *App) externalSync(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) runCatalogSync(ctx context.Context) (Catalog, int, error) {
 	c := a.config()
-	var libs struct{ Items []Item }
-	if err := a.fetch(ctx, c, "/Library/MediaFolders", &libs); err != nil {
-		return Catalog{}, http.StatusBadGateway, err
+	servers := configuredMediaServers(c)
+	if len(servers) == 0 {
+		return Catalog{}, http.StatusBadRequest, errors.New("No media server configured")
 	}
-	next := Catalog{SourceURL: c.EmbyURL, Libraries: libs.Items, Items: []Item{}, Updated: time.Now()}
-	for _, lib := range libs.Items {
-		for start := 0; ; {
-			var page struct {
-				Items            []Item
-				TotalRecordCount int
+	next := Catalog{SourceURL: c.EmbyURL, Libraries: []Item{}, Items: []Item{}, Updated: time.Now()}
+	if len(c.MediaServers) > 0 {
+		next.SourceURL = "multiple"
+	}
+	for _, server := range servers {
+		var libs struct{ Items []Item }
+		if err := a.fetchMediaServer(ctx, server, "/Library/MediaFolders", &libs); err != nil {
+			return Catalog{}, http.StatusBadGateway, err
+		}
+		for _, lib := range libs.Items {
+			remoteLibraryID := lib.ID
+			if len(c.MediaServers) > 0 {
+				applyServerIdentity(&lib, server.ID)
 			}
-			q := url.Values{"ParentId": {lib.ID}, "Recursive": {"true"}, "SortBy": {"DateCreated"}, "SortOrder": {"Descending"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
-			if err := a.fetch(ctx, c, "/Items?"+q.Encode(), &page); err != nil {
-				return Catalog{}, http.StatusBadGateway, err
-			}
-			for _, item := range page.Items {
-				item.LibraryID = lib.ID
-				next.Items = append(next.Items, item)
-			}
-			start += len(page.Items)
-			if start >= page.TotalRecordCount || len(page.Items) == 0 {
-				break
-			}
-			if start > 100000 {
-				return Catalog{}, http.StatusUnprocessableEntity, errors.New("Library exceeds 100,000 items")
+			next.Libraries = append(next.Libraries, lib)
+			for start := 0; ; {
+				var page struct {
+					Items            []Item
+					TotalRecordCount int
+				}
+				q := url.Values{"ParentId": {remoteLibraryID}, "Recursive": {"true"}, "SortBy": {"DateCreated"}, "SortOrder": {"Descending"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
+				if err := a.fetchMediaServer(ctx, server, "/Items?"+q.Encode(), &page); err != nil {
+					return Catalog{}, http.StatusBadGateway, err
+				}
+				for _, item := range page.Items {
+					item.LibraryID = remoteLibraryID
+					if len(c.MediaServers) > 0 {
+						applyServerIdentity(&item, server.ID)
+					}
+					next.Items = append(next.Items, item)
+				}
+				start += len(page.Items)
+				if start >= page.TotalRecordCount || len(page.Items) == 0 {
+					break
+				}
+				if start > 100000 {
+					return Catalog{}, http.StatusUnprocessableEntity, errors.New("Library exceeds 100,000 items")
+				}
 			}
 		}
 	}
@@ -1431,28 +1697,43 @@ func (a *App) runCatalogSync(ctx context.Context) (Catalog, int, error) {
 	}
 	return next, http.StatusOK, nil
 }
-func (a *App) sourceItem(id string) (Item, Config, bool) {
+func (a *App) sourceItem(id string, admin bool) (Item, MediaServer, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	if a.catalog.SourceURL != a.cfg.EmbyURL {
-		return Item{}, a.cfg, false
+	if len(a.cfg.MediaServers) == 0 && a.catalog.SourceURL != "" && a.catalog.SourceURL != a.cfg.EmbyURL {
+		return Item{}, MediaServer{}, false
 	}
 	for _, v := range a.catalog.Items {
 		if v.ID == id {
-			return v, a.cfg, true
+			if !admin {
+				for _, hidden := range a.cfg.HiddenAllContentLibraries {
+					if hidden == v.LibraryID {
+						return Item{}, MediaServer{}, false
+					}
+				}
+			}
+			serverID := v.ServerID
+			if serverID == "" {
+				serverID = "emby"
+			}
+			server, ok := mediaServerByID(a.cfg, serverID)
+			if !ok {
+				return Item{}, MediaServer{}, false
+			}
+			return v, server, true
 		}
 	}
-	return Item{}, a.cfg, false
+	return Item{}, MediaServer{}, false
 }
-func (a *App) item(id string) (Item, bool) { i, _, ok := a.sourceItem(id); return i, ok }
+func (a *App) item(id string) (Item, bool) { i, _, ok := a.sourceItem(id, true); return i, ok }
 func (a *App) image(w http.ResponseWriter, r *http.Request) {
 	id, kind := r.PathValue("id"), r.PathValue("kind")
-	_, c, ok := a.sourceItem(id)
+	item, server, ok := a.sourceItem(id, a.role(r) == "admin")
 	if !ok || (kind != "Primary" && kind != "Backdrop") {
 		fail(w, 404, "Image not found")
 		return
 	}
-	res, e := a.emby(r.Context(), c, "/Items/"+url.PathEscape(id)+"/Images/"+kind+"?MaxWidth=1280&Quality=85")
+	res, e := a.mediaServerRequest(r.Context(), server, "/Items/"+url.PathEscape(item.remoteID())+"/Images/"+kind+"?MaxWidth=1280&Quality=85")
 	if e != nil {
 		fail(w, 502, "Image unavailable")
 		return
@@ -1482,13 +1763,13 @@ func relativeSource(prefix, p string) (string, error) {
 	return rel, nil
 }
 func (a *App) download(w http.ResponseWriter, r *http.Request) {
-	item, c, ok := a.sourceItem(r.PathValue("id"))
+	item, server, ok := a.sourceItem(r.PathValue("id"), a.role(r) == "admin")
 	if !ok || item.IsFolder {
 		fail(w, 404, "File not found")
 		return
 	}
-	if c.SourceMode == "mount" {
-		rel, e := relativeSource(c.SourcePrefix, item.Path)
+	if server.SourceMode == "mount" {
+		rel, e := relativeSource(server.SourcePrefix, item.Path)
 		if e != nil {
 			fail(w, 403, e.Error())
 			return
@@ -1515,12 +1796,12 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 		downloadID := a.startDownload(a.displayNameForUser(a.user(r)), item.Name, item.Type, info.Size())
 		downloadWriter := &downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}
 		defer func() { a.finishDownload(downloadID, downloadWriter.err != nil || r.Context().Err() != nil) }()
-		a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
+		a.enqueueDownloadNotice(a.config(), downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
 		http.ServeContent(downloadWriter, r, info.Name(), info.ModTime(), file)
 		return
 	}
-	res, e := a.emby(r.Context(), c, "/Items/"+url.PathEscape(item.ID)+"/Download")
+	res, e := a.mediaServerRequest(r.Context(), server, "/Items/"+url.PathEscape(item.remoteID())+"/Download")
 	if e != nil {
 		fail(w, 502, "Emby download unavailable")
 		return
@@ -1537,7 +1818,7 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		a.finishDownload(downloadID, cancelled || downloadWriter.err != nil || r.Context().Err() != nil)
 	}()
-	a.enqueueDownloadNotice(c, downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
+	a.enqueueDownloadNotice(a.config(), downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if n := res.Header.Get("Content-Length"); n != "" {

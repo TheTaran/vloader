@@ -96,6 +96,80 @@ func TestSessionReportsEmbyConfigurationWithoutExposingURL(t *testing.T) {
 	}
 }
 
+func TestMultipleMediaServersUseDistinctCatalogIDs(t *testing.T) {
+	server := func(name string) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("X-Emby-Token") != name+"-key" {
+				t.Errorf("%s API key missing", name)
+			}
+			switch r.URL.Path {
+			case "/Library/MediaFolders":
+				jsonOut(w, map[string]any{"Items": []Item{{ID: "library", Name: name + " library"}}})
+			case "/Items":
+				jsonOut(w, map[string]any{"Items": []Item{{ID: "movie", Name: name + " movie", Type: "Movie", Path: "/media/" + name + ".mkv"}}, "TotalRecordCount": 1})
+			default:
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+	}
+	emby, jellyfin := server("emby"), server("jellyfin")
+	defer emby.Close()
+	defer jellyfin.Close()
+	a := testApp(t)
+	a.cfg.MediaServers = []MediaServer{{ID: "emby", Type: "emby", URL: emby.URL, APIKey: "emby-key", SourceMode: "emby", SourcePrefix: "/media"}, {ID: "jellyfin", Type: "jellyfin", URL: jellyfin.URL, APIKey: "jellyfin-key", SourceMode: "emby", SourcePrefix: "/media"}}
+	catalog, status, err := a.runCatalogSync(context.Background())
+	if err != nil || status != http.StatusOK || len(catalog.Libraries) != 2 || len(catalog.Items) != 2 {
+		t.Fatalf("multi-server sync failed: status=%d err=%v catalog=%+v", status, err, catalog)
+	}
+	if catalog.Items[0].ID == catalog.Items[1].ID || catalog.Items[0].RemoteID != "movie" || catalog.Items[1].RemoteID != "movie" {
+		t.Fatalf("server IDs were not namespaced: %+v", catalog.Items)
+	}
+	if _, _, ok := a.sourceItem("emby::movie", true); !ok {
+		t.Fatal("could not resolve Emby item to its server")
+	}
+	if _, _, ok := a.sourceItem("jellyfin::movie", true); !ok {
+		t.Fatal("could not resolve Jellyfin item to its server")
+	}
+}
+
+func TestHiddenAllContentLibrariesAreAdminOnly(t *testing.T) {
+	a := testApp(t)
+	a.cfg.MediaServers = []MediaServer{{ID: "emby", Type: "emby", URL: "https://emby.example.test", APIKey: "key", SourceMode: "emby", SourcePrefix: "/media"}}
+	a.cfg.HiddenAllContentLibraries = []string{"emby::private"}
+	a.catalog = Catalog{SourceURL: "multiple", Libraries: []Item{{ID: "emby::shared", ServerID: "emby", Name: "Shared"}, {ID: "emby::private", ServerID: "emby", Name: "Private"}}, Items: []Item{{ID: "emby::shared-item", ServerID: "emby", RemoteID: "shared-item", LibraryID: "emby::shared", Name: "Shared movie"}, {ID: "emby::private-item", ServerID: "emby", RemoteID: "private-item", LibraryID: "emby::private", Name: "Private movie"}}}
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	a.sessions["user-session"] = session{User: "user", Expiry: time.Now().Add(time.Hour)}
+	sessionRoles.Store("user-session", "user")
+	t.Cleanup(func() { sessionRoles.Delete("user-session") })
+	userCatalog := request(a, http.MethodGet, "/api/catalog", "", "", "user-session")
+	if userCatalog.Code != http.StatusOK || strings.Contains(userCatalog.Body.String(), "Private") {
+		t.Fatalf("hidden library was visible to user: %d %s", userCatalog.Code, userCatalog.Body.String())
+	}
+	adminCatalog := request(a, http.MethodGet, "/api/catalog", "", "", "admin-session")
+	if adminCatalog.Code != http.StatusOK || !strings.Contains(adminCatalog.Body.String(), "Private") {
+		t.Fatalf("hidden library was not visible to admin: %d %s", adminCatalog.Code, adminCatalog.Body.String())
+	}
+	if _, _, ok := a.sourceItem("emby::private-item", false); ok {
+		t.Fatal("non-admin could resolve a hidden library item")
+	}
+}
+
+func TestAdminCanSaveSeparateEmbyAndJellyfinSettings(t *testing.T) {
+	a := testApp(t)
+	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
+	body := `{"mediaServers":[{"id":"emby","type":"emby","url":"","apiKey":"","sourceMode":"emby","sourcePrefix":"/media"},{"id":"jellyfin","type":"jellyfin","url":"","apiKey":"","sourceMode":"emby","sourcePrefix":"/media"}],"syncEnabled":true,"syncIntervalMinutes":60}`
+	if got := request(a, http.MethodPost, "/api/settings/media-servers", body, a.origin, "admin-session"); got.Code != http.StatusOK {
+		t.Fatalf("save media servers: %d %s", got.Code, got.Body.String())
+	}
+	if len(a.cfg.MediaServers) != 2 || a.cfg.MediaServers[0].ID != "emby" || a.cfg.MediaServers[1].ID != "jellyfin" {
+		t.Fatalf("media server settings not persisted: %+v", a.cfg.MediaServers)
+	}
+	settings := request(a, http.MethodGet, "/api/settings", "", "", "admin-session")
+	if settings.Code != http.StatusOK || !strings.Contains(settings.Body.String(), `"MediaServers"`) || strings.Contains(settings.Body.String(), `"apiKey"`) {
+		t.Fatalf("settings response was unsafe or incomplete: %d %s", settings.Code, settings.Body.String())
+	}
+}
+
 func TestActiveDownloadsAreVisibleOnlyToAdministrators(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}
