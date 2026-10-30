@@ -99,12 +99,12 @@ func TestSMTPDisableTLSUsesPlainSMTP(t *testing.T) {
 
 	port := listener.Addr().(*net.TCPAddr).Port
 	cfg := Config{AdminEmail: "admin@example.com", SMTPHost: "127.0.0.1", SMTPPort: port, SMTPFrom: "vloader@example.com", SMTPDisableTLS: true, NotifyDownloadsEmail: true}
-	notice := downloadNotice{User: "Viewer Name", Title: "Requested Film", MediaType: "Movie", StartedAt: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)}
+	notice := downloadNotice{User: "Viewer Name", Title: "Requested Episode", SeriesTitle: "Requested Series", MediaType: "Episode", StartedAt: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)}
 	if err := sendDownloadNotification(cfg, "https://vloader.example.com", notice); err != nil {
 		t.Fatalf("plain SMTP send failed: %v", err)
 	}
 	got := <-result
-	if got.err != nil || got.recipient != "<admin@example.com>" || !strings.Contains(got.message, "Requested Film") || !strings.Contains(got.message, "Viewer Name") || !strings.Contains(got.message, "Download started") {
+	if got.err != nil || got.recipient != "<admin@example.com>" || !strings.Contains(got.message, "Requested Episode") || !strings.Contains(got.message, "Requested Series") || !strings.Contains(got.message, "Viewer Name") || !strings.Contains(got.message, "Download started") {
 		t.Fatalf("plain SMTP server result = %#v", got)
 	}
 }
@@ -120,6 +120,17 @@ func TestDownloadNotificationsUseLocalSystemTime(t *testing.T) {
 	}
 	if got := slackDownloadMessage(notice); !strings.Contains(got, "Time: 13.10.2026, 14:00:00") || strings.Contains(got, "UTC") {
 		t.Fatalf("slack notification did not use local time: %q", got)
+	}
+}
+
+func TestEpisodeDownloadNotificationsIncludeSeriesTitle(t *testing.T) {
+	episode := downloadNotice{User: "Viewer", Title: "Pilot", SeriesTitle: "Example Series", MediaType: "Episode", StartedAt: time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)}
+	if got := slackDownloadMessage(episode); !strings.Contains(got, "Series: Example Series") {
+		t.Fatalf("Slack episode notification omitted series title: %q", got)
+	}
+	plain := downloadNotice{User: "Viewer", Title: "Example Film", MediaType: "Movie", StartedAt: episode.StartedAt}
+	if got := slackDownloadMessage(plain); strings.Contains(got, "Series:") {
+		t.Fatalf("movie notification incorrectly included series title: %q", got)
 	}
 }
 

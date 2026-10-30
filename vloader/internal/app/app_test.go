@@ -170,6 +170,18 @@ func TestLegacyEmbyServerGUIDDoesNotHideCatalog(t *testing.T) {
 	}
 }
 
+func TestEpisodeSeriesTitleUsesCatalogSeries(t *testing.T) {
+	a := testApp(t)
+	episode := Item{ID: "episode", Type: "Episode", Name: "Pilot", SeriesID: "series"}
+	a.catalog = Catalog{Items: []Item{{ID: "series", Type: "Series", Name: "Example Series"}, episode}}
+	if got := a.seriesTitleFor(episode); got != "Example Series" {
+		t.Fatalf("episode series title = %q, want Example Series", got)
+	}
+	if got := a.seriesTitleFor(Item{Type: "Movie", Name: "Example Film"}); got != "" {
+		t.Fatalf("movie series title = %q, want empty", got)
+	}
+}
+
 func TestAdminCanSaveSeparateEmbyAndJellyfinSettings(t *testing.T) {
 	a := testApp(t)
 	a.sessions["admin-session"] = session{User: "admin", Expiry: time.Now().Add(time.Hour)}

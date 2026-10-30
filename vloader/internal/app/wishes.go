@@ -590,9 +590,14 @@ func sendDownloadNotification(cfg Config, appURL string, notice downloadNotice) 
 		return nil
 	}
 	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.Title)
+	seriesTitle := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.SeriesTitle)
 	user := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.User)
 	mediaType := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.MediaType)
-	body := fmt.Sprintf("A vloader download was started.\r\n\r\nTitle: %s\r\nType: %s\r\nUser: %s\r\nTime: %s\r\n\r\nOpen vloader: %s\r\n", title, mediaType, user, notificationTime(notice.StartedAt), strings.TrimRight(appURL, "/")+"/")
+	seriesLine := ""
+	if seriesTitle != "" {
+		seriesLine = "Series: " + seriesTitle + "\r\n"
+	}
+	body := fmt.Sprintf("A vloader download was started.\r\n\r\nTitle: %s\r\n%sType: %s\r\nUser: %s\r\nTime: %s\r\n\r\nOpen vloader: %s\r\n", title, seriesLine, mediaType, user, notificationTime(notice.StartedAt), strings.TrimRight(appURL, "/")+"/")
 	return sendSMTPMessage(cfg, cfg.AdminEmail, "[vloader] Download started: "+title, body)
 }
 
@@ -607,9 +612,14 @@ func slackWishMessage(event string, wish Wish) string {
 
 func slackDownloadMessage(notice downloadNotice) string {
 	title := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.Title)
+	seriesTitle := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.SeriesTitle)
 	user := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.User)
 	mediaType := strings.NewReplacer("\r", " ", "\n", " ").Replace(notice.MediaType)
-	return fmt.Sprintf("*vloader — Download started*\nTitle: %s\nType: %s\nUser: %s\nTime: %s", title, mediaType, user, notificationTime(notice.StartedAt))
+	seriesLine := ""
+	if seriesTitle != "" {
+		seriesLine = "\nSeries: " + seriesTitle
+	}
+	return fmt.Sprintf("*vloader — Download started*\nTitle: %s%s\nType: %s\nUser: %s\nTime: %s", title, seriesLine, mediaType, user, notificationTime(notice.StartedAt))
 }
 
 func notificationTime(timestamp time.Time) string {

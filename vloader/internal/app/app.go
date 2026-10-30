@@ -106,6 +106,7 @@ type Item struct {
 	ParentID          string `json:"ParentId"`
 	LibraryID         string `json:"LibraryId"`
 	SeriesID          string `json:"SeriesId"`
+	SeriesName        string `json:"SeriesName"`
 	SeasonID          string `json:"SeasonId"`
 	IndexNumber       int
 	ParentIndexNumber int
@@ -171,10 +172,11 @@ type Wish struct {
 	UpdatedAt             time.Time `json:"updatedAt"`
 }
 type downloadNotice struct {
-	User      string
-	Title     string
-	MediaType string
-	StartedAt time.Time
+	User        string
+	Title       string
+	MediaType   string
+	SeriesTitle string
+	StartedAt   time.Time
 }
 type activeDownload struct {
 	ID          string    `json:"id"`
@@ -1657,7 +1659,7 @@ func (a *App) runCatalogSync(ctx context.Context) (Catalog, int, error) {
 					Items            []Item
 					TotalRecordCount int
 				}
-				q := url.Values{"ParentId": {remoteLibraryID}, "Recursive": {"true"}, "SortBy": {"DateCreated"}, "SortOrder": {"Descending"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
+				q := url.Values{"ParentId": {remoteLibraryID}, "Recursive": {"true"}, "SortBy": {"DateCreated"}, "SortOrder": {"Descending"}, "Fields": {"Overview,Path,Genres,ProviderIds,MediaSources,MediaStreams,PremiereDate,DateCreated,ParentId,SeriesId,SeriesName,SeasonId,IndexNumber"}, "StartIndex": {fmt.Sprint(start)}, "Limit": {"500"}}
 				if err := a.fetchMediaServer(ctx, server, "/Items?"+q.Encode(), &page); err != nil {
 					return Catalog{}, http.StatusBadGateway, err
 				}
@@ -1726,6 +1728,27 @@ func (a *App) sourceItem(id string, admin bool) (Item, MediaServer, bool) {
 	}
 	return Item{}, MediaServer{}, false
 }
+
+func (a *App) seriesTitleFor(item Item) string {
+	if item.Type != "Episode" {
+		return ""
+	}
+	if title := strings.TrimSpace(item.SeriesName); title != "" {
+		return title
+	}
+	if item.SeriesID == "" {
+		return ""
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, candidate := range a.catalog.Items {
+		if candidate.ID == item.SeriesID && candidate.Type == "Series" {
+			return strings.TrimSpace(candidate.Name)
+		}
+	}
+	return ""
+}
+
 func (a *App) item(id string) (Item, bool) { i, _, ok := a.sourceItem(id, true); return i, ok }
 func (a *App) image(w http.ResponseWriter, r *http.Request) {
 	id, kind := r.PathValue("id"), r.PathValue("kind")
@@ -1797,7 +1820,7 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 		downloadID := a.startDownload(a.displayNameForUser(a.user(r)), item.Name, item.Type, info.Size())
 		downloadWriter := &downloadResponseWriter{ResponseWriter: w, app: a, id: downloadID}
 		defer func() { a.finishDownload(downloadID, downloadWriter.err != nil || r.Context().Err() != nil) }()
-		a.enqueueDownloadNotice(a.config(), downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
+		a.enqueueDownloadNotice(a.config(), downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, SeriesTitle: a.seriesTitleFor(item), StartedAt: time.Now().UTC()})
 		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": info.Name()}))
 		http.ServeContent(downloadWriter, r, info.Name(), info.ModTime(), file)
 		return
@@ -1819,7 +1842,7 @@ func (a *App) download(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		a.finishDownload(downloadID, cancelled || downloadWriter.err != nil || r.Context().Err() != nil)
 	}()
-	a.enqueueDownloadNotice(a.config(), downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, StartedAt: time.Now().UTC()})
+	a.enqueueDownloadNotice(a.config(), downloadNotice{User: a.displayNameForUser(a.user(r)), Title: item.Name, MediaType: item.Type, SeriesTitle: a.seriesTitleFor(item), StartedAt: time.Now().UTC()})
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	w.Header().Set("Content-Type", "application/octet-stream")
 	if n := res.Header.Get("Content-Length"); n != "" {
