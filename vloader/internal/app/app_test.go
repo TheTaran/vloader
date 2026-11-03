@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/oauth2"
 )
 
 func TestRequestErrorsAreLoggedWithoutQueryString(t *testing.T) {
@@ -93,6 +95,25 @@ func TestSessionReportsEmbyConfigurationWithoutExposingURL(t *testing.T) {
 	}
 	if !strings.Contains(got.Body.String(), `"embyConfigured":true`) || strings.Contains(got.Body.String(), "emby.example.test") {
 		t.Fatalf("session did not safely report Emby configuration: %s", got.Body.String())
+	}
+}
+
+func TestDisabledLocalAuthenticationOnlyExposesOIDC(t *testing.T) {
+	a := testApp(t)
+	a.localAuth = false
+	a.oauth = &oauth2.Config{ClientID: "test-client"}
+
+	session := request(a, http.MethodGet, "/api/session", "", "", "")
+	if session.Code != http.StatusOK {
+		t.Fatalf("session status: %d %s", session.Code, session.Body.String())
+	}
+	if !strings.Contains(session.Body.String(), `"localAuth":false`) || !strings.Contains(session.Body.String(), `"oidc":true`) {
+		t.Fatalf("OIDC-only session configuration missing: %s", session.Body.String())
+	}
+
+	login := request(a, http.MethodPost, "/auth/login", `{"Username":"admin","Password":"test-password-strong-123"}`, a.origin, "")
+	if login.Code != http.StatusNotFound || !strings.Contains(login.Body.String(), "Local authentication is disabled") {
+		t.Fatalf("disabled local login was reachable: %d %s", login.Code, login.Body.String())
 	}
 }
 
