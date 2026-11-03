@@ -1,4 +1,5 @@
 ## Unreleased
+- Update `github.com/go-jose/go-jose/v4` to v4.1.7.
 - Include the parent series title in email and Slack download notifications for episodes.
 - Keep legacy Emby libraries visible after saving All content settings when Emby supplies its internal server GUID.
 - Support separate Emby and Jellyfin connections that can be synchronized into one collection.

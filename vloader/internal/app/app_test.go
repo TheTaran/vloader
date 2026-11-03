@@ -326,6 +326,16 @@ func TestExternalSyncRequiresKeyAndAcceptsWebhookWithoutOrigin(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("external sync was not started in the background")
 	}
+	// The webhook returns before the catalog is persisted. Wait for the
+	// background goroutine to finish so TempDir cleanup cannot race it.
+	deadline := time.Now().Add(time.Second)
+	for !a.syncMu.TryLock() {
+		if time.Now().After(deadline) {
+			t.Fatal("external sync did not finish in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	a.syncMu.Unlock()
 }
 
 func TestAuthenticationAndCSRF(t *testing.T) {
