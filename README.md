@@ -279,7 +279,7 @@ docker compose ps
 If Go is not installed on the host, use the pinned build image:
 
 ```bash
-docker run --rm -v "$PWD/vloader:/app" -w /app golang:1.27.2-alpine \
+docker run --rm -v "$PWD/vloader:/app" -w /app golang:1.27.4-alpine \
   sh -c 'go test ./... && go vet ./...'
 ```
 

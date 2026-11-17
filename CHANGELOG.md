@@ -1,4 +1,5 @@
 ## Unreleased
+- Update Go to 1.27.4 and refresh go-jose, x/crypto and OAuth2 dependencies from the current component review.
 - Prevent the local sign-in form from appearing before authentication options load; OIDC-only deployments now show only SSO.
 - Update `github.com/go-jose/go-jose/v4` to v4.1.7.
 - Include the parent series title in email and Slack download notifications for episodes.
